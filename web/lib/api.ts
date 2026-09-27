@@ -22,16 +22,19 @@ import type {
   DiagnosisResult,
   Evaluation,
   EvaluationRun,
+  InferenceResponse,
   Intelligence,
   IntelligencePrimitive,
   IntelligenceSpec,
   IntelligenceVersion,
+  IntelligenceVersionDiff,
   JobStatus,
   MetricSeries,
   Model,
   ModelVersion,
   Project,
   ProjectStatus,
+  ProviderInfo,
   QualityVector,
   RunCost,
   RunMetrics,
@@ -618,6 +621,8 @@ export interface CreateDeploymentInput {
   name: string;
   spec_id: string;
   model_version_id?: string;
+  /** Phase 4 preferred target: an immutable intelligence version. */
+  intelligence_version_id?: string;
 }
 
 export async function listDeployments(
@@ -645,6 +650,40 @@ export async function patchDeployment(
   return request<Deployment>(
     `/api/v1/deployments/${encodeURIComponent(deploymentId)}`,
     { method: "PATCH", body: JSON.stringify(input) },
+  );
+}
+
+/** Phase 4: deployment detail (includes the intelligence version it serves). */
+export async function getDeployment(deploymentId: string): Promise<Deployment> {
+  return request<Deployment>(
+    `/api/v1/deployments/${encodeURIComponent(deploymentId)}`,
+  );
+}
+
+/** Phase 4: structural diff between two versions of an intelligence. */
+export async function getIntelligenceVersionDiff(
+  intelligenceId: string,
+  fromVersion: number,
+  toVersion: number,
+): Promise<IntelligenceVersionDiff> {
+  return request<IntelligenceVersionDiff>(
+    `/api/v1/intelligences/${encodeURIComponent(intelligenceId)}/versions/${fromVersion}/diff/${toVersion}`,
+  );
+}
+
+/** Phase 4: inference provider capability entries. */
+export async function listProviders(): Promise<ProviderInfo[]> {
+  return request<ProviderInfo[]>(`/api/v1/inference/providers`);
+}
+
+/** Phase 4: run one inference against a deployment. */
+export async function inferDeployment(
+  deploymentId: string,
+  inputs: Record<string, unknown>,
+): Promise<InferenceResponse> {
+  return request<InferenceResponse>(
+    `/api/v1/deployments/${encodeURIComponent(deploymentId)}/infer`,
+    { method: "POST", body: JSON.stringify({ inputs }) },
   );
 }
 
@@ -1299,6 +1338,15 @@ export async function getIntelligenceVersion(
   );
 }
 
+/** Phase 4: one intelligence version by its immutable id (deployment pins). */
+export async function getIntelligenceVersionById(
+  versionId: string,
+): Promise<IntelligenceVersion> {
+  return request<IntelligenceVersion>(
+    `/api/v1/intelligence-versions/${encodeURIComponent(versionId)}`,
+  );
+}
+
 /**
  * Promote an intelligence version.
  * Promotion logic lands in Phase 6: the backend answers 501. Callers should
@@ -1523,9 +1571,16 @@ export const MOCK_INTELLIGENCE_VERSIONS: IntelligenceVersion[] = [
       baselines: ["deterministic_rule"],
       harness: "decision-harness@0.9.0",
     },
+    architecture: null,
+    input_schema: { progress_score: { type: "number", required: true } },
+    output_schema: {
+      decision: { type: "string" },
+      confidence: { type: "number" },
+    },
     notes: "First packaged intelligence: v1 model behind the decision harness.",
     best_evaluation_run_id: null,
     status: "ACTIVE",
+    locked: true,
     created_at: "2026-09-26T12:12:00Z",
   },
   {
@@ -1537,10 +1592,17 @@ export const MOCK_INTELLIGENCE_VERSIONS: IntelligenceVersion[] = [
       baselines: ["deterministic_rule", "keyword_heuristic"],
       harness: "decision-harness@1.0.0",
     },
+    architecture: null,
+    input_schema: { progress_score: { type: "number", required: true } },
+    output_schema: {
+      decision: { type: "string" },
+      confidence: { type: "number" },
+    },
     notes:
       "v2 model (95.8% on the termination benchmark) with the hardened harness.",
     best_evaluation_run_id: MOCK_EVAL_RUN_DONE_ID,
     status: "ACTIVE",
+    locked: true,
     created_at: "2026-09-26T12:40:00Z",
   },
 ];

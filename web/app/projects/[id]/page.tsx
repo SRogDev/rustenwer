@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import type {
+  Deployment,
   Evaluation,
   IntelligenceSpec,
   Project,
@@ -20,6 +21,7 @@ import {
   getUsageRollups,
   getUsageSummary,
   isApiOfflineError,
+  listDeployments,
   listEvaluations,
   listSpecs,
   listTrainingJobs,
@@ -191,14 +193,21 @@ export default async function ProjectDetailPage({
     : projectResult.data;
   if (!project) notFound();
 
-  const [specsResult, jobsResult, evalsResult, usageResult, rollupsResult] =
-    await Promise.all([
-      withOffline(() => listSpecs(id), MOCK_SPECS),
-      withOffline(() => listTrainingJobs(id), MOCK_TRAINING_JOBS),
-      withOffline(() => listEvaluations(id), MOCK_EVALUATIONS),
-      withOffline(() => getUsageSummary(id), MOCK_USAGE_SUMMARY),
-      withOffline(() => getUsageRollups(id), MOCK_USAGE_ROLLUPS),
-    ]);
+  const [
+    specsResult,
+    jobsResult,
+    evalsResult,
+    usageResult,
+    rollupsResult,
+    deploymentsResult,
+  ] = await Promise.all([
+    withOffline(() => listSpecs(id), MOCK_SPECS),
+    withOffline(() => listTrainingJobs(id), MOCK_TRAINING_JOBS),
+    withOffline(() => listEvaluations(id), MOCK_EVALUATIONS),
+    withOffline(() => getUsageSummary(id), MOCK_USAGE_SUMMARY),
+    withOffline(() => getUsageRollups(id), MOCK_USAGE_ROLLUPS),
+    withOffline(() => listDeployments(id), [] as Deployment[]),
+  ]);
 
   const offline =
     projectResult.offline ||
@@ -206,13 +215,15 @@ export default async function ProjectDetailPage({
     jobsResult.offline ||
     evalsResult.offline ||
     usageResult.offline ||
-    rollupsResult.offline;
+    rollupsResult.offline ||
+    deploymentsResult.offline;
 
   const specs: IntelligenceSpec[] = specsResult.data;
   const jobs: TrainingJob[] = jobsResult.data;
   const evaluations: Evaluation[] = evalsResult.data;
   const usage: UsageSummary = usageResult.data;
   const rollups: UsageRollups = rollupsResult.data;
+  const deployments: Deployment[] = deploymentsResult.data;
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6 sm:py-14">
@@ -432,6 +443,52 @@ export default async function ProjectDetailPage({
                     </div>
                   </dl>
                 )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Section>
+
+      <Section
+        id="deployments-heading"
+        title="Deployments"
+        action={
+          <Link
+            href={`/projects/${id}/deployments/new`}
+            className="inline-flex min-h-[44px] cursor-pointer items-center gap-1.5 rounded-lg border border-line bg-paper px-4 py-2 text-sm font-semibold text-charcoal transition-colors duration-200 hover:border-charcoal hover:bg-platinum"
+          >
+            New deployment
+            <ArrowRight className="h-4 w-4" aria-hidden="true" />
+          </Link>
+        }
+      >
+        {deployments.length === 0 ? (
+          <EmptyState text="No deployments yet. Deploy an immutable intelligence version to serve live inference." />
+        ) : (
+          <ul className="grid gap-4 sm:grid-cols-2">
+            {deployments.map((deployment) => (
+              <li
+                key={deployment.id}
+                className="rounded-xl border border-line bg-card p-5"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <h3 className="font-display text-base font-bold text-charcoal">
+                    <Link
+                      href={`/projects/${id}/deployments/${deployment.id}`}
+                      aria-label={`View deployment ${deployment.name}`}
+                      className="rounded underline decoration-platinum-deep underline-offset-4 transition-colors duration-200 hover:decoration-charcoal"
+                    >
+                      {deployment.name}
+                    </Link>
+                  </h3>
+                  <StatusPill status={deployment.status} />
+                </div>
+                <p className="mt-2 font-mono text-xs break-all text-muted-ink">
+                  {deployment.endpoint_url ?? "no endpoint yet"}
+                </p>
+                <p className="mt-1 text-xs text-muted-ink">
+                  provider: {deployment.provider}
+                </p>
               </li>
             ))}
           </ul>

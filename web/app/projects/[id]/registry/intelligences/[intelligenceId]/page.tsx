@@ -1,4 +1,4 @@
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Rocket } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -6,9 +6,11 @@ import type {
   Intelligence,
   IntelligenceVersion,
 } from "../../../../../../../shared/types";
+import { ArchitectureDiagram } from "../../../../../../components/ArchitectureDiagram";
 import { OfflineBanner } from "../../../../../../components/OfflineBanner";
 import { PromoteIntelligenceButton } from "../../../../../../components/PromoteIntelligenceButton";
 import { StatusPill } from "../../../../../../components/StatusPill";
+import { VersionDiffViewer } from "../../../../../../components/VersionDiffViewer";
 import {
   getIntelligence,
   isApiOfflineError,
@@ -241,6 +243,18 @@ export default async function IntelligenceDetailPage({
                     {version.notes}
                   </p>
                 )}
+                {version.architecture && (
+                  <div className="mt-4 border-t border-line pt-4">
+                    <h4 className="text-xs font-semibold tracking-wide text-muted-ink uppercase">
+                      Architecture snapshot
+                    </h4>
+                    <div className="mt-3">
+                      <ArchitectureDiagram
+                        architecture={version.architecture}
+                      />
+                    </div>
+                  </div>
+                )}
                 <div className="mt-4 border-t border-line pt-4">
                   <ResolvedComponents components={version.components} />
                 </div>
@@ -260,11 +274,44 @@ export default async function IntelligenceDetailPage({
                     </dd>
                   </div>
                 </dl>
+                <div className="mt-4 border-t border-line pt-4">
+                  <Link
+                    href={`/projects/${id}/deployments/new?version=${version.id}`}
+                    className="inline-flex min-h-[44px] items-center gap-2 rounded-lg border border-line bg-paper px-4 py-2 text-sm font-semibold text-charcoal transition-colors duration-200 hover:border-charcoal hover:bg-platinum"
+                  >
+                    <Rocket className="h-4 w-4" aria-hidden="true" />
+                    Deploy this version
+                  </Link>
+                </div>
               </li>
             ))}
           </ol>
         )}
       </section>
+
+      {versions.length >= 2 && (
+        <section
+          aria-labelledby="diff-heading"
+          className="mt-10 rounded-xl border border-line bg-card p-5 sm:p-6"
+        >
+          <h2
+            id="diff-heading"
+            className="font-display text-2xl font-bold tracking-tight text-charcoal"
+          >
+            Compare versions
+          </h2>
+          <p className="mt-2 text-sm leading-6 text-muted-ink">
+            Structural diff of architecture snapshots — what changed between two
+            immutable versions.
+          </p>
+          <div className="mt-4">
+            <VersionDiffViewer
+              intelligenceId={intelligenceId}
+              versions={versions}
+            />
+          </div>
+        </section>
+      )}
     </div>
   );
 }
