@@ -289,7 +289,8 @@ class TrainingStrategy(BaseModel):
     """
 
     model_family: Optional[str] = None  # Null when the strategy is "no training".
-    architecture: Optional[str] = None
+    # Structured architecture description (e.g. {"type": "text-classifier", ...}).
+    architecture: Optional[dict[str, Any]] = None
     # e.g. 'none-deterministic' | 'lora' | 'qlora' | 'distillation' | 'embedding-ft'
     training_method: Optional[str] = None
     objective: str = ""

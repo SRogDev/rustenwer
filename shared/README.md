@@ -27,7 +27,7 @@ Base URL: `http://localhost:8000` (env `API_URL`; web uses `NEXT_PUBLIC_API_URL`
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| POST | `/api/v1/projects/{id}/specs` | bearer | create spec → `201` (DRAFT) |
+| POST | `/api/v1/projects/{id}/specs` | bearer | create spec → `201` (DRAFT); omit `intelligence_primitive` for keyword-based auto-detect |
 | GET | `/api/v1/projects/{id}/specs` | bearer | list specs of a project |
 | GET | `/api/v1/specs/{spec_id}` | bearer | spec detail or `404` |
 | PATCH | `/api/v1/specs/{spec_id}` | bearer | update DRAFT fields; `409` when not DRAFT |
@@ -76,6 +76,9 @@ Errors: `{detail: string}` with standard HTTP codes.
 
 ## Changelog
 
+- 2026-09-26 — Contract fix: `TrainingStrategy.architecture` is
+  `Record<string, unknown> | null` (structured), not a string — the strategy
+  service produces structured architecture descriptions (plan §9).
 - 2026-09-26 — Phase 1 contract: `Dataset`, `DatasetVersion`, `DatasetReport`,
   `DiagnosisResult` (incl. `ml_necessary`, plan Rule 13), `BaselineMetrics`,
   `QualityBar`, `BaselineReport`, `TrainingStrategy`, `TrainingJob`,

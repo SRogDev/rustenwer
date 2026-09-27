@@ -235,7 +235,8 @@ export interface BaselineReport {
 export interface TrainingStrategy {
   /** Null when the strategy is "no training" (Rule 2/13). */
   model_family: string | null;
-  architecture: string | null;
+  /** Structured architecture description (e.g. {type: 'text-classifier', ...}). */
+  architecture: Record<string, unknown> | null;
   /** e.g. 'none-deterministic' | 'lora' | 'qlora' | 'distillation' | 'embedding-ft' */
   training_method: string | null;
   objective: string;
