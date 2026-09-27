@@ -360,6 +360,26 @@ def _rebuild_mlp(n_features: int, n_classes: int, hp: dict[str, Any], seed: int)
     return torch.nn.Sequential(*layers)
 
 
+def load_classifier_bundle(version: ModelVersion, artifact_root: Path):
+    """Load a registered classifier bundle: (torch, model, config).
+
+    Public so the Phase-4 inference pipeline reuses the exact same
+    rebuild-and-load path as evaluation (Rule 11: one loader, no drift).
+    """
+    torch = _torch()
+    bundle = _resolve_bundle_dir(version.artifact_uri, Path(artifact_root))
+    config = json.loads((bundle / "config.json").read_text(encoding="utf-8"))
+    n_features = int(config["n_features"])
+    n_classes = int(config["n_classes"])
+    hp = config.get("hyperparameters") or {}
+    seed = int(config.get("seed", 0))
+    model = _rebuild_mlp(n_features, n_classes, hp, seed)
+    state = torch.load(bundle / "model.pt", map_location="cpu", weights_only=True)
+    model.load_state_dict(state["model"] if isinstance(state, dict) and "model" in state else state)
+    model.eval()
+    return torch, model, config
+
+
 def evaluate_model_version_rows(
     version: ModelVersion,
     rows: list[dict[str, Any]],
@@ -370,13 +390,9 @@ def evaluate_model_version_rows(
     row_delay_s: float = 0.0,
 ) -> RowPredictions:
     """Score a registered model version per row: predict_proba + latencies."""
-    torch = _torch()
-    bundle = _resolve_bundle_dir(version.artifact_uri, Path(artifact_root))
-    config = json.loads((bundle / "config.json").read_text(encoding="utf-8"))
+    torch, model, config = load_classifier_bundle(version, Path(artifact_root))
     n_features = int(config["n_features"])
     n_classes = int(config["n_classes"])
-    hp = config.get("hyperparameters") or {}
-    seed = int(config.get("seed", 0))
 
     labeled = [row for row in rows if row.get(label_column) is not None]
     unique_labels = sorted({row[label_column] for row in labeled}, key=str)
@@ -387,11 +403,6 @@ def evaluate_model_version_rows(
         )
     positive = positive_label_for([row[label_column] for row in labeled])
     positive_idx = unique_labels.index(positive)
-
-    model = _rebuild_mlp(n_features, n_classes, hp, seed)
-    state = torch.load(bundle / "model.pt", map_location="cpu", weights_only=True)
-    model.load_state_dict(state["model"] if isinstance(state, dict) and "model" in state else state)
-    model.eval()
 
     result = RowPredictions(total_rows=len(rows), positive_label=positive)
     with torch.no_grad():

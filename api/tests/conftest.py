@@ -15,8 +15,10 @@ from app import models as models_module
 from app import specs as specs_module
 from app import training as training_module
 from app import usage as usage_module
+from app.intelligence import router as intelligence_router_module
 from app.main import create_app
 from app.projects import InMemoryProjectRepository, get_repository
+from app.registry import intelligences as intelligences_module
 
 
 @pytest.fixture
@@ -71,6 +73,7 @@ def client(
     deployment_repository: deployments_module.InMemoryDeploymentRepository,
     usage_repository: usage_module.InMemoryUsageRepository,
 ) -> TestClient:
+    intelligence_repository = intelligences_module.InMemoryIntelligenceRepository()
     """TestClient wired to fresh repositories via dependency overrides."""
     application = create_app()
     application.dependency_overrides[get_repository] = lambda: repository
@@ -115,6 +118,41 @@ def client(
     )
     application.dependency_overrides[usage_module.get_project_repository] = lambda: repository
     application.dependency_overrides[demo_module.get_project_repository] = lambda: repository
+    # Phase 4: intelligence wiring. The deployment and inference routers
+    # resolve model/intelligence repositories through lazy hooks; without
+    # these overrides tests would hit the global singleton stores.
+    application.dependency_overrides[intelligences_module.get_intelligence_repository] = (
+        lambda: intelligence_repository
+    )
+    application.dependency_overrides[intelligences_module.get_model_repository_hook] = (
+        lambda: model_repository
+    )
+    application.dependency_overrides[
+        deployments_module.get_intelligence_repository_hook
+    ] = lambda: intelligence_repository
+    application.dependency_overrides[deployments_module.get_model_repository_hook] = (
+        lambda: model_repository
+    )
+    application.dependency_overrides[
+        intelligence_router_module.get_intelligence_repository_hook
+    ] = lambda: intelligence_repository
+    application.dependency_overrides[
+        intelligence_router_module.get_model_repository_hook
+    ] = lambda: model_repository
+    application.dependency_overrides[
+        intelligence_router_module.get_usage_repository_hook
+    ] = lambda: usage_repository
+    application.state.test_repos = {  # type: ignore[attr-defined]
+        "project": repository,
+        "spec": spec_repository,
+        "dataset": dataset_repository,
+        "training_job": training_job_repository,
+        "model": model_repository,
+        "evaluation": evaluation_repository,
+        "deployment": deployment_repository,
+        "usage": usage_repository,
+        "intelligence": intelligence_repository,
+    }
     return TestClient(application)
 
 

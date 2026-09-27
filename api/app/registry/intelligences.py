@@ -21,11 +21,18 @@ from pydantic import BaseModel, Field
 from shared.domain import (
     ApiUser,
     Intelligence,
+    IntelligenceArchitecture,
     IntelligencePrimitive,
     IntelligenceVersion,
+    IntelligenceVersionDiff,
 )
 
 from app.auth import get_current_user
+from app.intelligence.architectures import (
+    ArchitectureValidationError,
+    validate_architecture,
+)
+from app.intelligence.diff import diff_versions
 from app.projects import ProjectRepository
 from app.projects import get_repository as get_project_repository
 
@@ -54,6 +61,9 @@ class IntelligenceComponents(BaseModel):
 
 class IntelligenceVersionCreate(BaseModel):
     components: IntelligenceComponents = Field(default_factory=IntelligenceComponents)
+    architecture: IntelligenceArchitecture | None = None
+    input_schema: dict[str, Any] = Field(default_factory=dict)
+    output_schema: dict[str, Any] = Field(default_factory=dict)
     notes: str | None = None
 
 
@@ -76,6 +86,10 @@ class IntelligenceVersionDetail(IntelligenceVersion):
 # --------------------------------------------------------------------------
 # Repository interface + in-memory implementation
 # --------------------------------------------------------------------------
+
+
+class DuplicateVersionError(ValueError):
+    """A version number already exists for the intelligence (→409)."""
 
 
 class IntelligenceRepository(Protocol):
@@ -103,8 +117,16 @@ class IntelligenceRepository(Protocol):
         """An intelligence's version by its number, or None when missing."""
         ...
 
+    def get_version_by_id(self, version_id: UUID) -> IntelligenceVersion | None:
+        """An intelligence version by its id, or None when missing."""
+        ...
+
     def create_version(self, version: IntelligenceVersion) -> IntelligenceVersion:
-        """Persist an immutable intelligence version."""
+        """Persist an immutable intelligence version.
+
+        Raises DuplicateVersionError when the (intelligence_id, version)
+        pair already exists — versions are append-only (§43).
+        """
         ...
 
 
@@ -147,8 +169,21 @@ class InMemoryIntelligenceRepository:
                     return v
             return None
 
+    def get_version_by_id(self, version_id: UUID) -> IntelligenceVersion | None:
+        with self._lock:
+            return self._versions.get(version_id)
+
     def create_version(self, version: IntelligenceVersion) -> IntelligenceVersion:
         with self._lock:
+            for existing in self._versions.values():
+                if (
+                    existing.intelligence_id == version.intelligence_id
+                    and existing.version == version.version
+                ):
+                    raise DuplicateVersionError(
+                        f"Intelligence version {version.version} already exists "
+                        f"for intelligence {version.intelligence_id}"
+                    )
             self._versions[version.id] = version
             return version
 
@@ -316,6 +351,27 @@ def get_intelligence(
     )
 
 
+def _components_for(
+    payload: IntelligenceVersionCreate, architecture: IntelligenceArchitecture | None
+) -> dict[str, Any]:
+    """Build the legacy components dict, deriving it from the architecture
+    when one is published so both views stay consistent."""
+    if architecture is None:
+        return payload.components.model_dump(mode="json")
+    model_version_ids: list[str] = []
+    baseline_refs: list[str] = []
+    for component in architecture.components:
+        if component.kind.value == "model_version" and component.ref:
+            model_version_ids.append(component.ref)
+        elif component.kind.value == "baseline" and component.ref:
+            baseline_refs.append(component.ref)
+    return {
+        "model_version_ids": model_version_ids,
+        "baseline_refs": baseline_refs,
+        "harness": payload.components.harness,
+    }
+
+
 @router.post(
     "/intelligences/{intelligence_id}/versions",
     response_model=IntelligenceVersion,
@@ -341,6 +397,14 @@ def create_intelligence_version(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Model version not found: {version_id}",
             )
+    architecture = payload.architecture
+    if architecture is not None:
+        try:
+            validate_architecture(architecture, model_repository)
+        except ArchitectureValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+            ) from exc
     next_number = (
         max(
             (v.version for v in intelligence_repository.list_versions(intelligence.id)),
@@ -352,11 +416,19 @@ def create_intelligence_version(
         id=uuid4(),
         intelligence_id=intelligence.id,
         version=next_number,
-        components=payload.components.model_dump(mode="json"),
+        components=_components_for(payload, architecture),
+        architecture=architecture,
+        input_schema=payload.input_schema,
+        output_schema=payload.output_schema,
         notes=payload.notes,
         created_at=_utc_now(),
     )
-    return intelligence_repository.create_version(version)
+    try:
+        return intelligence_repository.create_version(version)
+    except DuplicateVersionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
 
 
 @router.get(
@@ -401,6 +473,32 @@ def get_intelligence_version(
             status_code=status.HTTP_404_NOT_FOUND, detail="Intelligence version not found"
         )
     return _resolve_version(intelligence_version, model_repository)
+
+
+@router.get(
+    "/intelligences/{intelligence_id}/versions/{version_a}/diff/{version_b}",
+    response_model=IntelligenceVersionDiff,
+)
+def diff_intelligence_versions(
+    intelligence_id: UUID,
+    version_a: int,
+    version_b: int,
+    intelligence_repository: IntelligenceRepository = Depends(get_intelligence_repository),
+    project_repository: ProjectRepository = Depends(get_project_repository),
+    user: ApiUser = Depends(get_current_user),
+) -> IntelligenceVersionDiff:
+    """What changed between two intelligence versions (§32, §37)."""
+    intelligence = _get_intelligence_or_404(
+        intelligence_repository, project_repository, intelligence_id, user
+    )
+    v_a = intelligence_repository.get_version_by_number(intelligence.id, version_a)
+    v_b = intelligence_repository.get_version_by_number(intelligence.id, version_b)
+    if v_a is None or v_b is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Intelligence version not found",
+        )
+    return diff_versions(v_a, v_b)
 
 
 @router.post(
