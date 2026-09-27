@@ -13,7 +13,12 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
-from shared.domain import ApiUser, Deployment, DeploymentStatus
+from shared.domain import (
+    ApiUser,
+    Deployment,
+    DeploymentStatus,
+    InferenceProvider,
+)
 
 from app.auth import get_current_user
 from app.projects import ProjectRepository
@@ -41,7 +46,14 @@ _ALLOWED_DEPLOYMENT_TRANSITIONS: dict[DeploymentStatus, frozenset[DeploymentStat
 class DeploymentCreate(BaseModel):
     name: str = Field(min_length=1)
     spec_id: UUID
+    # Phase 4: deploy an Intelligence (preferred). Exactly one of the two
+    # target refs is required.
+    intelligence_version_id: UUID | None = None
+    # Back-compat: a bare model_version_id auto-creates a single-model
+    # intelligence wrapping it. Optional "classes"/"feature_key" may be
+    # passed inside config so the wrapper can serve real predictions.
     model_version_id: UUID | None = None
+    provider: InferenceProvider = InferenceProvider.RUSTENWER_HOSTED
     endpoint_url: str | None = None
     config: dict[str, Any] = Field(default_factory=dict)
 
@@ -127,6 +139,22 @@ def get_deployment_repository() -> DeploymentRepository:
 _default_repository = InMemoryDeploymentRepository()
 
 
+def get_intelligence_repository_hook() -> Any:
+    """Resolve the intelligence repository without a module-level import.
+
+    Keeps this module cycle-free with app.registry.intelligences."""
+    from app.registry.intelligences import get_intelligence_repository
+
+    return get_intelligence_repository()
+
+
+def get_model_repository_hook() -> Any:
+    """Resolve the model repository without a module-level import."""
+    from app.models import get_model_repository
+
+    return get_model_repository()
+
+
 def _get_project_or_404(
     project_repository: ProjectRepository, project_id: UUID, user: ApiUser
 ) -> None:
@@ -162,19 +190,73 @@ def create_deployment(
     payload: DeploymentCreate,
     deployment_repository: DeploymentRepository = Depends(get_deployment_repository),
     project_repository: ProjectRepository = Depends(get_project_repository),
+    # Any: the app.registry ModelRepository / app.models ModelRepository
+    # Protocols (resolved lazily to keep this module cycle-free).
+    intelligence_repository: Any = Depends(get_intelligence_repository_hook),
+    model_repository: Any = Depends(get_model_repository_hook),
     user: ApiUser = Depends(get_current_user),
 ) -> Deployment:
-    """Create a deployment in DRAFT status."""
+    """Create a deployment in DRAFT status.
+
+    Phase 4: the deployment targets an immutable intelligence version
+    (preferred). Passing only model_version_id keeps the Phase-1 contract
+    working: a single-model intelligence is auto-created around it.
+    """
+    from app.intelligence.service import ensure_model_backcompat_intelligence
+
     _get_project_or_404(project_repository, project_id, user)
+    has_intelligence = payload.intelligence_version_id is not None
+    has_model = payload.model_version_id is not None
+    if has_intelligence == has_model:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Exactly one of intelligence_version_id / model_version_id "
+                "is required."
+            ),
+        )
+
+    intelligence_version_id = payload.intelligence_version_id
+    model_version_id = payload.model_version_id
+    if has_model:
+        assert payload.model_version_id is not None
+        model_version = model_repository.get_version(payload.model_version_id)
+        if model_version is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Model version not found: {payload.model_version_id}",
+            )
+        model = model_repository.get_model(model_version.model_id)
+        _, intel_version = ensure_model_backcompat_intelligence(
+            project_id=project_id,
+            model=model,
+            model_version=model_version,
+            classes=payload.config.get("classes"),
+            feature_key=str(payload.config.get("feature_key", "x")),
+            intelligence_repository=intelligence_repository,
+        )
+        intelligence_version_id = intel_version.id
+    else:
+        assert intelligence_version_id is not None
+        if intelligence_repository.get_version_by_id(intelligence_version_id) is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Intelligence version not found: {intelligence_version_id}",
+            )
+
     now = _utc_now()
+    deployment_id = uuid4()
     deployment = Deployment(
-        id=uuid4(),
+        id=deployment_id,
         project_id=project_id,
         spec_id=payload.spec_id,
-        model_version_id=payload.model_version_id,
+        model_version_id=model_version_id,
+        intelligence_version_id=intelligence_version_id,
+        provider=payload.provider,
         name=payload.name,
         status=DeploymentStatus.DRAFT,
-        endpoint_url=payload.endpoint_url,
+        endpoint_url=payload.endpoint_url
+        or f"/api/v1/deployments/{deployment_id}/infer",
         config=payload.config,
         created_at=now,
         updated_at=now,
@@ -192,6 +274,19 @@ def list_deployments(
     """List all deployments of a project."""
     _get_project_or_404(project_repository, project_id, user)
     return deployment_repository.list_deployments(project_id)
+
+
+@router.get("/deployments/{deployment_id}", response_model=Deployment)
+def get_deployment(
+    deployment_id: UUID,
+    deployment_repository: DeploymentRepository = Depends(get_deployment_repository),
+    project_repository: ProjectRepository = Depends(get_project_repository),
+    user: ApiUser = Depends(get_current_user),
+) -> Deployment:
+    """Deployment detail; 404 when missing or owned by another org."""
+    return _get_deployment_or_404(
+        deployment_repository, project_repository, deployment_id, user
+    )
 
 
 @router.patch("/deployments/{deployment_id}", response_model=Deployment)

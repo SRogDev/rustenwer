@@ -14,6 +14,7 @@ from app.demo import router as demo_router
 from app.deployments import router as deployments_router
 from app.evaluation import router as evaluation_router
 from app.evaluations import router as evaluations_router
+from app.intelligence.router import router as intelligence_router
 from app.logging_config import configure_logging, get_logger
 from app.models import router as models_router
 from app.projects import router as projects_router
@@ -81,6 +82,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(evaluation_router)
     app.include_router(registry_router)
     app.include_router(deployments_router)
+    app.include_router(intelligence_router)
     app.include_router(usage_router)
     app.include_router(demo_router)
     return app

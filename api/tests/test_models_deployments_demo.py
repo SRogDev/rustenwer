@@ -99,7 +99,18 @@ def _create_deployment(
     client: TestClient, project_id: UUID, auth_headers: dict, **overrides
 ) -> dict:
     spec = _create_spec(client, project_id, auth_headers)
-    payload = {"name": "prod", "spec_id": spec["id"]}
+    model = _create_model(client, project_id, auth_headers)
+    version = client.post(
+        f"/api/v1/models/{model['id']}/versions",
+        json={"metrics": {"accuracy": 0.9}},
+        headers=auth_headers,
+    )
+    assert version.status_code == 201, version.text
+    payload = {
+        "name": "prod",
+        "spec_id": spec["id"],
+        "model_version_id": version.json()["id"],
+    }
     payload.update(overrides)
     resp = client.post(
         f"/api/v1/projects/{project_id}/deployments", json=payload, headers=auth_headers
