@@ -67,7 +67,7 @@ export type ProjectStatus = 'ACTIVE' | 'PAUSED' | 'ARCHIVED';
 export type IntelligenceSpecStatus = 'DRAFT' | 'DIAGNOSED' | 'APPROVED' | 'ARCHIVED';
 
 /** Evaluation lifecycle status. */
-export type EvaluationStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED';
+export type EvaluationStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
 
 /** Deployment lifecycle status. */
 export type DeploymentStatus = 'DRAFT' | 'ACTIVE' | 'PAUSED' | 'ARCHIVED';
@@ -83,6 +83,7 @@ export type UsageScope =
   | 'training_job'
   | 'model'
   | 'deployment'
+  | 'evaluation'
   | 'inference';
 
 /** Usage accounting kind (§45). */
@@ -349,6 +350,108 @@ export interface ModelVersion {
   size_bytes: number | null;
   metrics: Record<string, unknown>;
   artifact_uri: string | null;
+  /** Phase 3 lineage (§43, §59): which dataset/strategy/code/seed/base produced it. */
+  dataset_version_id: string | null;
+  training_strategy: Record<string, unknown> | null;
+  code_version: string | null;
+  template_version: string | null;
+  seed: number | null;
+  base_model: string | null;
+  lineage_locked: boolean;
+  created_at: string;
+}
+
+/** What an EvaluationRun evaluates (Rule 11: one interface for anything). */
+export type SubjectKind = 'baseline' | 'model_version' | 'reference';
+
+export interface EvaluationSubject {
+  kind: SubjectKind;
+  ref: string | null;
+  quality_vector: QualityVector | null;
+}
+
+/** Multi-objective candidate quality (plan §30). No global weights. */
+export interface QualityVector {
+  task_quality: number | null;
+  calibration: number | null;
+  robustness: number | null;
+  latency_ms_p50: number | null;
+  latency_ms_p99: number | null;
+  inference_cost_usd_per_1k: number | null;
+  training_cost_usd: number | null;
+  model_size_bytes: number | null;
+  reliability: number | null;
+}
+
+/** Benchmark — reusable across candidate architectures (plan §57). */
+export interface Benchmark {
+  id: string;
+  project_id: string | null;
+  name: string;
+  description: string;
+  input_spec: Record<string, unknown>;
+  expected_output: Record<string, unknown>;
+  evaluation_function: string;
+  dataset_version_id: string | null;
+  metrics: string[];
+  cost_rules: Record<string, unknown>;
+  created_at: string;
+}
+
+/** EvaluationRun — one async evaluation of a subject on a benchmark. */
+export interface EvaluationRun {
+  id: string;
+  project_id: string;
+  benchmark_id: string;
+  spec_id: string | null;
+  name: string;
+  subject: EvaluationSubject;
+  status: EvaluationStatus;
+  quality_vector: QualityVector | null;
+  metrics: Record<string, unknown>;
+  cost_usd: number;
+  error: string | null;
+  created_at: string;
+  completed_at: string | null;
+}
+
+export interface ComparisonSubjectResult {
+  subject: EvaluationSubject;
+  quality_vector: QualityVector | null;
+  metrics: Record<string, unknown>;
+  beats_bar: boolean | null;
+  beats_incumbent: boolean | null;
+}
+
+export interface ComparisonReport {
+  benchmark_id: string;
+  generated_at: string;
+  results: ComparisonSubjectResult[];
+  baseline_bar: QualityBar | null;
+  incumbent: ComparisonSubjectResult | null;
+  winner: string | null;
+  notes: string[];
+}
+
+/** Intelligence — executable cognitive system, separate from Model (plan §31). */
+export interface Intelligence {
+  id: string;
+  project_id: string;
+  name: string;
+  description: string | null;
+  primitive: IntelligencePrimitive | null;
+  created_at: string;
+}
+
+/** IntelligenceVersion — immutable version referencing immutable components. */
+export interface IntelligenceVersion {
+  id: string;
+  intelligence_id: string;
+  version: number;
+  components: Record<string, unknown>;
+  notes: string | null;
+  best_evaluation_run_id: string | null;
+  status: string;
   created_at: string;
 }
 
@@ -405,6 +508,21 @@ export interface UsageSummary {
   project_id: string;
   total_cost_usd: number;
   by_scope: Record<string, number>;
+  by_kind: Record<string, number>;
+  event_count: number;
+}
+
+export interface ScopeRollup {
+  scope: string;
+  total_cost_usd: number;
+  by_kind: Record<string, number>;
+  event_count: number;
+}
+
+export interface UsageRollups {
+  project_id: string;
+  total_cost_usd: number;
+  by_scope: Record<string, ScopeRollup>;
   by_kind: Record<string, number>;
   event_count: number;
 }

@@ -88,6 +88,7 @@ class EvaluationStatus(StrEnum):
     RUNNING = "RUNNING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
 
 
 class DeploymentStatus(StrEnum):
@@ -116,6 +117,7 @@ class UsageScope(StrEnum):
     TRAINING_JOB = "training_job"
     MODEL = "model"
     DEPLOYMENT = "deployment"
+    EVALUATION = "evaluation"
     INFERENCE = "inference"
 
 
@@ -145,7 +147,7 @@ class ApiUser(BaseModel):
     id: UUID
     organization_id: UUID
     email: str
-    display_name: Optional[str] = None
+    display_name: str | None = None
     role: UserRole = UserRole.MEMBER
     created_at: str
 
@@ -154,9 +156,9 @@ class Project(BaseModel):
     id: UUID
     organization_id: UUID
     name: str
-    description: Optional[str] = None
+    description: str | None = None
     status: ProjectStatus = ProjectStatus.ACTIVE
-    created_by: Optional[UUID] = None
+    created_by: UUID | None = None
     created_at: str
     updated_at: str
 
@@ -168,21 +170,21 @@ class IntelligenceSpec(BaseModel):
     id: UUID
     project_id: UUID
     name: str
-    description: Optional[str] = None
+    description: str | None = None
     problem_statement: str
     input_schema: dict[str, Any] = Field(default_factory=dict)
     output_schema: dict[str, Any] = Field(default_factory=dict)
     intelligence_primitive: IntelligencePrimitive
-    quality_requirements: Optional[dict[str, Any]] = None
-    latency_requirements: Optional[dict[str, Any]] = None
-    cost_requirements: Optional[dict[str, Any]] = None
-    memory_requirements: Optional[dict[str, Any]] = None
-    reliability_requirements: Optional[dict[str, Any]] = None
+    quality_requirements: dict[str, Any] | None = None
+    latency_requirements: dict[str, Any] | None = None
+    cost_requirements: dict[str, Any] | None = None
+    memory_requirements: dict[str, Any] | None = None
+    reliability_requirements: dict[str, Any] | None = None
     constraints: list[str] = Field(default_factory=list)
-    available_data: Optional[str] = None
-    evaluation_definition: Optional[str] = None
-    deployment_requirements: Optional[dict[str, Any]] = None
-    human_review_policy: Optional[str] = None
+    available_data: str | None = None
+    evaluation_definition: str | None = None
+    deployment_requirements: dict[str, Any] | None = None
+    human_review_policy: str | None = None
     status: IntelligenceSpecStatus = IntelligenceSpecStatus.DRAFT
     version: int = 1
 
@@ -198,7 +200,7 @@ class Dataset(BaseModel):
     id: UUID
     project_id: UUID
     name: str
-    description: Optional[str] = None
+    description: str | None = None
     format: DatasetFormat = DatasetFormat.INLINE
     row_count: int = 0
     created_at: str
@@ -212,7 +214,7 @@ class DatasetReport(BaseModel):
     version: int
     row_count: int
     column_schema: dict[str, str] = Field(default_factory=dict)
-    class_balance: Optional[dict[str, int]] = None
+    class_balance: dict[str, int] | None = None
     missing_values: dict[str, int] = Field(default_factory=dict)
     leakage_flags: list[str] = Field(default_factory=list)
     imbalance_detected: bool = False
@@ -256,7 +258,7 @@ class BaselineMetrics(BaseModel):
 
     name: str  # 'majority_class' | 'keyword_heuristic' | 'deterministic_rule'
     description: str
-    accuracy: Optional[float] = None
+    accuracy: float | None = None
     latency_ms_p50: float = 0.0
     cost_usd_per_1k: float = 0.0
     size_bytes: int = 0
@@ -288,21 +290,21 @@ class TrainingStrategy(BaseModel):
     The agent DECIDES; the executor (Phase 2) executes (Rule 3).
     """
 
-    model_family: Optional[str] = None  # Null when the strategy is "no training".
+    model_family: str | None = None  # Null when the strategy is "no training".
     # Structured architecture description (e.g. {"type": "text-classifier", ...}).
-    architecture: Optional[dict[str, Any]] = None
+    architecture: dict[str, Any] | None = None
     # e.g. 'none-deterministic' | 'lora' | 'qlora' | 'distillation' | 'embedding-ft'
-    training_method: Optional[str] = None
+    training_method: str | None = None
     objective: str = ""
-    dataset_ref: Optional[dict[str, Any]] = None  # {dataset_id, version}
+    dataset_ref: dict[str, Any] | None = None  # {dataset_id, version}
     hyperparameters: dict[str, Any] = Field(default_factory=dict)
     evaluation_plan: str = ""
-    compute_budget: dict[str, Optional[float]] = Field(
+    compute_budget: dict[str, float | None] = Field(
         default_factory=lambda: {"max_gpu_hours": None, "max_cost_usd": None}
     )
-    baseline_bar: Optional[QualityBar] = None
+    baseline_bar: QualityBar | None = None
     rationale: str = ""
-    no_training_justification: Optional[str] = None  # Set when ml_necessary is False.
+    no_training_justification: str | None = None  # Set when ml_necessary is False.
 
 
 class TrainingJob(BaseModel):
@@ -313,13 +315,13 @@ class TrainingJob(BaseModel):
 
     id: UUID
     project_id: UUID
-    spec_id: Optional[UUID] = None
-    dataset_version_id: Optional[UUID] = None
+    spec_id: UUID | None = None
+    dataset_version_id: UUID | None = None
     name: str
     status: JobStatus = JobStatus.CREATED
-    strategy: Optional[TrainingStrategy] = None
-    compute_budget: Optional[dict[str, Optional[float]]] = None
-    error: Optional[str] = None
+    strategy: TrainingStrategy | None = None
+    compute_budget: dict[str, float | None] | None = None
+    error: str | None = None
     created_at: str
     updated_at: str
 
@@ -334,10 +336,10 @@ class TrainingRun(BaseModel):
     provider: str = "local"  # 'local' | 'digitalocean' — the ComputeProvider that ran it.
     metrics: dict[str, Any] = Field(default_factory=dict)
     artifacts: dict[str, Any] = Field(default_factory=dict)
-    logs: Optional[str] = None
-    error: Optional[str] = None
-    started_at: Optional[str] = None
-    finished_at: Optional[str] = None
+    logs: str | None = None
+    error: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
 
 
 class CheckpointInfo(BaseModel):
@@ -399,21 +401,166 @@ class Model(BaseModel):
     id: UUID
     project_id: UUID
     name: str
-    description: Optional[str] = None
+    description: str | None = None
     created_at: str
 
 
 class ModelVersion(BaseModel):
-    """ModelVersion — immutable version of a model (§43)."""
+    """ModelVersion — immutable version of a model (§43).
+
+    Phase 3 adds the full lineage: which dataset version, which training
+    strategy, which code/template version, which seed, and which base model
+    produced it. Published versions are never mutated — a change means a
+    new version (the repository offers no update path).
+    """
 
     id: UUID
     model_id: UUID
     version: int = 1
-    training_run_id: Optional[UUID] = None
-    architecture: Optional[dict[str, Any]] = None
-    size_bytes: Optional[int] = None
+    training_run_id: UUID | None = None
+    architecture: dict[str, Any] | None = None
+    size_bytes: int | None = None
     metrics: dict[str, Any] = Field(default_factory=dict)
-    artifact_uri: Optional[str] = None
+    artifact_uri: str | None = None
+    # -- Phase 3 lineage (§43, §59) --------------------------------------
+    dataset_version_id: UUID | None = None
+    training_strategy: dict[str, Any] | None = None
+    code_version: str | None = None  # git commit of the training code
+    template_version: str | None = None  # validated template used
+    seed: int | None = None
+    base_model: str | None = None  # e.g. 'mlp-from-scratch' | HF id
+    lineage_locked: bool = True  # published versions are immutable
+    created_at: str
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — Evaluation & Registry (plan §61 Phase 3, §§30–33, 55–57)
+# ---------------------------------------------------------------------------
+
+
+class SubjectKind(StrEnum):
+    """What an EvaluationRun evaluates (Rule 11: one interface for anything)."""
+
+    BASELINE = "baseline"  # a Phase-1 cheap baseline, by name
+    MODEL_VERSION = "model_version"  # a registered ModelVersion (torch artifact)
+    REFERENCE = "reference"  # a precomputed QualityVector (e.g. the incumbent)
+
+
+class EvaluationSubject(BaseModel):
+    """The subject of an evaluation run."""
+
+    kind: SubjectKind
+    ref: str | None = None  # baseline name | model_version UUID | label
+    quality_vector: Optional["QualityVector"] = None  # REFERENCE only
+
+
+class QualityVector(BaseModel):
+    """Multi-objective candidate quality (plan §30).
+
+    No hard-coded global weights: the IntelligenceSpec defines the
+    priorities, and `compare` orders subjects per those priorities.
+    Higher is better for every field except latency_*, *_cost_*, and
+    model_size_bytes (documented per field).
+    """
+
+    task_quality: float | None = None  # higher is better (e.g. accuracy)
+    calibration: float | None = None  # higher is better (1 - ECE)
+    robustness: float | None = None  # higher is better
+    latency_ms_p50: float | None = None  # lower is better
+    latency_ms_p99: float | None = None  # lower is better
+    inference_cost_usd_per_1k: float | None = None  # lower is better
+    training_cost_usd: float | None = None  # lower is better
+    model_size_bytes: int | None = None  # lower is better
+    reliability: float | None = None  # higher is better (1 - failure rate)
+
+
+class Benchmark(BaseModel):
+    """Benchmark — reusable across candidate architectures (plan §57)."""
+
+    id: UUID
+    project_id: UUID | None = None  # None = global seeded benchmark
+    name: str
+    description: str = ""
+    input_spec: dict[str, Any] = Field(default_factory=dict)
+    expected_output: dict[str, Any] = Field(default_factory=dict)
+    evaluation_function: str = "classification_on_rows"
+    dataset_version_id: UUID | None = None
+    metrics: list[str] = Field(default_factory=list)
+    cost_rules: dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+
+
+class EvaluationRun(BaseModel):
+    """EvaluationRun — one async evaluation of a subject on a benchmark.
+
+    Distinct from the Phase-1 `Evaluation` (synchronous baseline report).
+    Follows the same job lifecycle as training runs: PENDING -> RUNNING ->
+    COMPLETED / FAILED / CANCELLED (cancellable, observable).
+    """
+
+    id: UUID
+    project_id: UUID
+    benchmark_id: UUID
+    spec_id: UUID | None = None
+    name: str
+    subject: EvaluationSubject
+    status: EvaluationStatus = EvaluationStatus.PENDING
+    quality_vector: QualityVector | None = None
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    cost_usd: float = 0.0
+    error: str | None = None
+    created_at: str
+    completed_at: str | None = None
+
+
+class ComparisonSubjectResult(BaseModel):
+    """One subject's standing inside a ComparisonReport."""
+
+    subject: EvaluationSubject
+    quality_vector: QualityVector | None = None
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    beats_bar: bool | None = None  # vs the baseline QualityBar
+    beats_incumbent: bool | None = None  # per spec priorities
+
+
+class ComparisonReport(BaseModel):
+    """Candidate vs baselines vs incumbent (promotion-gate data for Phase 6)."""
+
+    benchmark_id: UUID
+    generated_at: str
+    results: list[ComparisonSubjectResult] = Field(default_factory=list)
+    baseline_bar: QualityBar | None = None
+    incumbent: ComparisonSubjectResult | None = None
+    winner: str | None = None  # subject label, per spec priorities
+    notes: list[str] = Field(default_factory=list)
+
+
+class Intelligence(BaseModel):
+    """Intelligence — an executable system performing a cognitive function
+    (plan §2.2, §31). SEPARATE from Model: one model may power multiple
+    intelligences; one intelligence may use multiple models."""
+
+    id: UUID
+    project_id: UUID
+    name: str
+    description: str | None = None
+    primitive: IntelligencePrimitive | None = None
+    created_at: str
+
+
+class IntelligenceVersion(BaseModel):
+    """IntelligenceVersion — immutable version referencing immutable
+    component versions (§31, §43)."""
+
+    id: UUID
+    intelligence_id: UUID
+    version: int = 1
+    components: dict[str, Any] = Field(
+        default_factory=dict
+    )  # {model_version_ids: [...], baseline_refs: [...], harness: {...}}
+    notes: str | None = None
+    best_evaluation_run_id: UUID | None = None
+    status: str = "DRAFT"  # DRAFT | PROMOTED (promotion logic lands in Phase 6)
     created_at: str
 
 
@@ -436,9 +583,9 @@ class Evaluation(BaseModel):
     dataset_version_id: UUID
     name: str
     status: EvaluationStatus = EvaluationStatus.PENDING
-    results: Optional[EvaluationResults] = None
+    results: EvaluationResults | None = None
     created_at: str
-    completed_at: Optional[str] = None
+    completed_at: str | None = None
 
 
 class Deployment(BaseModel):
@@ -447,10 +594,10 @@ class Deployment(BaseModel):
     id: UUID
     project_id: UUID
     spec_id: UUID
-    model_version_id: Optional[UUID] = None
+    model_version_id: UUID | None = None
     name: str
     status: DeploymentStatus = DeploymentStatus.DRAFT
-    endpoint_url: Optional[str] = None
+    endpoint_url: str | None = None
     config: dict[str, Any] = Field(default_factory=dict)
     created_at: str
     updated_at: str
@@ -476,5 +623,28 @@ class UsageSummary(BaseModel):
     project_id: UUID
     total_cost_usd: float = 0.0
     by_scope: dict[str, float] = Field(default_factory=dict)
+    by_kind: dict[str, float] = Field(default_factory=dict)
+    event_count: int = 0
+
+
+class ScopeRollup(BaseModel):
+    """Per-scope cost breakdown (Phase 3 cost accounting)."""
+
+    scope: str
+    total_cost_usd: float = 0.0
+    by_kind: dict[str, float] = Field(default_factory=dict)
+    event_count: int = 0
+
+
+class UsageRollups(BaseModel):
+    """Per-scope cost rollups for a project (Phase 3, §45).
+
+    Answers "how much did each model / deployment / training job /
+    evaluation cost?" from the recorded UsageEvents.
+    """
+
+    project_id: UUID
+    total_cost_usd: float = 0.0
+    by_scope: dict[str, ScopeRollup] = Field(default_factory=dict)
     by_kind: dict[str, float] = Field(default_factory=dict)
     event_count: int = 0

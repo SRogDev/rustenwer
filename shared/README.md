@@ -80,6 +80,47 @@ Base URL: `http://localhost:8000` (env `API_URL`; web uses `NEXT_PUBLIC_API_URL`
 - `TrainingRun` gains `provider: string` (`'local'` default) and `error: string | null`.
 - New shapes: `CheckpointInfo`, `ArtifactRecord`, `MetricPoint`, `MetricSeries`, `RunMetrics`, `RunCost` (see `shared/types.ts` / `shared/domain.py`).
 
+### Phase 3 — Evaluation & Registry
+
+Evaluation runs (async, cancellable, same job lifecycle as training runs):
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/api/v1/projects/{project_id}/benchmarks` | bearer | seeded + project benchmarks |
+| POST | `/api/v1/projects/{project_id}/benchmarks` | bearer | create a benchmark → `201 Benchmark` |
+| GET | `/api/v1/benchmarks/{benchmark_id}` | bearer | benchmark detail |
+| POST | `/api/v1/benchmarks/{benchmark_id}/runs` | bearer | `{spec_id?, name?, subject: {kind, ref?}}` → `201 EvaluationRun` (async) |
+| GET | `/api/v1/projects/{project_id}/evaluation-runs` | bearer | list evaluation runs |
+| GET | `/api/v1/evaluation-runs/{run_id}` | bearer | run detail incl. `quality_vector` |
+| POST | `/api/v1/evaluation-runs/{run_id}/cancel` | bearer | → `CANCELLED` |
+| POST | `/api/v1/benchmarks/{benchmark_id}/compare` | bearer | `{spec_id?, subjects[], incumbent_intelligence_version_id?}` → `200 ComparisonReport` (candidate vs baselines vs incumbent) |
+
+Registry:
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/api/v1/models/{model_id}/versions/{version}` | bearer | one model version with lineage |
+| GET | `/api/v1/models/{model_id}/lineage` | bearer | version chain + what changed between versions |
+| POST | `/api/v1/projects/{project_id}/intelligences` | bearer | → `201 Intelligence` |
+| GET | `/api/v1/projects/{project_id}/intelligences` | bearer | list |
+| GET | `/api/v1/intelligences/{intelligence_id}` | bearer | detail |
+| POST | `/api/v1/intelligences/{intelligence_id}/versions` | bearer | `{components, notes?}` → `201 IntelligenceVersion` (immutable) |
+| GET | `/api/v1/intelligences/{intelligence_id}/versions` | bearer | version chain |
+| GET | `/api/v1/intelligences/{intelligence_id}/versions/{version}` | bearer | one version + resolved component lineage |
+| POST | `/api/v1/intelligences/{intelligence_id}/promote` | bearer | `501` — promotion logic lands in Phase 6 |
+
+Cost:
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/api/v1/projects/{project_id}/usage/rollups` | bearer | per-scope cost rollups (training_job, model, deployment, evaluation, inference) |
+
+### Phase 3 contract amendments
+
+- `EvaluationStatus` gains `CANCELLED`.
+- `ModelVersion` gains lineage: `dataset_version_id`, `training_strategy`, `code_version`, `template_version`, `seed`, `base_model`, `lineage_locked`.
+- New shapes: `SubjectKind`, `EvaluationSubject`, `QualityVector` (plan §30, no global weights), `Benchmark` (plan §57), `EvaluationRun`, `ComparisonSubjectResult`, `ComparisonReport`, `Intelligence`, `IntelligenceVersion` (plan §31).
+
 Deterministic domain logic (diagnosis, dataset validation, baselines,
 strategy proposal, job transitions, usage summary) lives in
 `shared/services/` (pure Python, no FastAPI/LangGraph imports) so the API
@@ -96,6 +137,14 @@ the canonical schema.
 Errors: `{detail: string}` with standard HTTP codes.
 
 ## Changelog
+
+- 2026-09-27 — Phase 3 contract: `SubjectKind`, `EvaluationSubject`,
+  `QualityVector` (plan §30), `Benchmark` (plan §57), `EvaluationRun`,
+  `ComparisonSubjectResult`, `ComparisonReport`, `Intelligence`,
+  `IntelligenceVersion` (plan §31); `EvaluationStatus` gains `CANCELLED`;
+  `ModelVersion` gains lineage fields (`dataset_version_id`,
+  `training_strategy`, `code_version`, `template_version`, `seed`,
+  `base_model`, `lineage_locked`). Full endpoint table above.
 
 - 2026-09-26 — Contract fix: `TrainingStrategy.architecture` is
   `Record<string, unknown> | null` (structured), not a string — the strategy
