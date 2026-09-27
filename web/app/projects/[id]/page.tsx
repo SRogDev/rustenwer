@@ -1,18 +1,32 @@
-import {
-  ArrowLeft,
-  Database,
-  Dumbbell,
-  FileText,
-  Gauge,
-  Telescope,
-} from "lucide-react";
+import { ArrowLeft, ArrowRight, Database } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import type { Project } from "../../../../shared/types";
+import type {
+  Evaluation,
+  IntelligenceSpec,
+  Project,
+  TrainingJob,
+  UsageSummary,
+} from "../../../../shared/types";
+import { JobTransitionButtons } from "../../../components/JobTransitionButtons";
 import { OfflineBanner } from "../../../components/OfflineBanner";
 import { StatusBadge } from "../../../components/StatusBadge";
-import { getProject, isApiOfflineError, MOCK_PROJECTS } from "../../../lib/api";
+import { StatusPill } from "../../../components/StatusPill";
+import { TerminationDemoButton } from "../../../components/TerminationDemoButton";
+import {
+  getProject,
+  getUsageSummary,
+  isApiOfflineError,
+  listEvaluations,
+  listSpecs,
+  listTrainingJobs,
+  MOCK_EVALUATIONS,
+  MOCK_PROJECTS,
+  MOCK_SPECS,
+  MOCK_TRAINING_JOBS,
+  MOCK_USAGE_SUMMARY,
+} from "../../../lib/api";
 
 export const metadata: Metadata = {
   title: "Project detail",
@@ -34,33 +48,60 @@ function formatDateTime(iso: string): string {
   });
 }
 
-const PHASE_ONE_PANELS = [
-  {
-    icon: FileText,
-    title: "Intelligence Specs",
-    text: "The formal contract — problem statement, schemas, primitives, and requirements — that every downstream step operates against.",
-  },
-  {
-    icon: Database,
-    title: "Datasets",
-    text: "Training, validation, and evaluation data attached to this project, with lineage and versioning.",
-  },
-  {
-    icon: Dumbbell,
-    title: "Training Jobs",
-    text: "Expensive operations run as jobs with a real lifecycle: created, queued, running, completed — or failed honestly.",
-  },
-  {
-    icon: Gauge,
-    title: "Evaluations",
-    text: "Candidate intelligences measured against your definition of good enough, with comparable scores.",
-  },
-  {
-    icon: Telescope,
-    title: "Discovery",
-    text: "Observations from production feeding back into the loop: find better candidates, promote what works.",
-  },
-] as const;
+function formatPercent(value: number | null): string {
+  return value === null ? "n/a" : `${(value * 100).toFixed(1)}%`;
+}
+
+/**
+ * Fetch with per-resource offline fallback: reads serve the labeled mock
+ * dataset when the API is unreachable; any other error propagates.
+ */
+async function withOffline<T>(
+  fetch: () => Promise<T>,
+  mock: T,
+): Promise<{ data: T; offline: boolean }> {
+  try {
+    return { data: await fetch(), offline: false };
+  } catch (err) {
+    if (isApiOfflineError(err)) return { data: mock, offline: true };
+    throw err;
+  }
+}
+
+function Section({
+  id,
+  title,
+  children,
+  action,
+}: {
+  id: string;
+  title: string;
+  children: React.ReactNode;
+  action?: React.ReactNode;
+}) {
+  return (
+    <section aria-labelledby={id} className="mt-10">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2
+          id={id}
+          className="font-display text-2xl font-bold tracking-tight text-charcoal"
+        >
+          {title}
+        </h2>
+        {action}
+      </div>
+      <div className="mt-4">{children}</div>
+    </section>
+  );
+}
+
+function EmptyState({ text }: { text: string }) {
+  return (
+    <div className="rounded-xl border border-dashed border-line bg-card p-8 text-center">
+      <p className="text-sm text-muted-ink">{text}</p>
+    </div>
+  );
+}
 
 export default async function ProjectDetailPage({
   params,
@@ -69,21 +110,32 @@ export default async function ProjectDetailPage({
 }) {
   const { id } = await params;
 
-  let project: Project | null = null;
-  let offline = false;
-
-  try {
-    project = await getProject(id);
-  } catch (err) {
-    if (isApiOfflineError(err)) {
-      offline = true;
-      project = MOCK_PROJECTS.find((p) => p.id === id) ?? null;
-    } else {
-      throw err;
-    }
-  }
-
+  const projectResult = await withOffline(() => getProject(id), null);
+  const project: Project | null = projectResult.offline
+    ? (MOCK_PROJECTS.find((p) => p.id === id) ?? null)
+    : projectResult.data;
   if (!project) notFound();
+
+  const [specsResult, jobsResult, evalsResult, usageResult] = await Promise.all(
+    [
+      withOffline(() => listSpecs(id), MOCK_SPECS),
+      withOffline(() => listTrainingJobs(id), MOCK_TRAINING_JOBS),
+      withOffline(() => listEvaluations(id), MOCK_EVALUATIONS),
+      withOffline(() => getUsageSummary(id), MOCK_USAGE_SUMMARY),
+    ],
+  );
+
+  const offline =
+    projectResult.offline ||
+    specsResult.offline ||
+    jobsResult.offline ||
+    evalsResult.offline ||
+    usageResult.offline;
+
+  const specs: IntelligenceSpec[] = specsResult.data;
+  const jobs: TrainingJob[] = jobsResult.data;
+  const evaluations: Evaluation[] = evalsResult.data;
+  const usage: UsageSummary = usageResult.data;
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6 sm:py-14">
@@ -135,46 +187,220 @@ export default async function ProjectDetailPage({
         </dl>
       </div>
 
-      <section aria-labelledby="phase1-heading" className="mt-10">
-        <h2
-          id="phase1-heading"
-          className="font-display text-2xl font-bold tracking-tight text-charcoal"
-        >
-          The fabrication workspace
-        </h2>
-        <p className="mt-2 max-w-2xl text-base leading-7 text-muted-ink">
-          These panels arrive with Phase 1. For now they mark exactly where
-          specs, datasets, jobs, evaluations, and discovery will live.
-        </p>
-        <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {PHASE_ONE_PANELS.map((panel) => {
-            const Icon = panel.icon;
-            return (
-              <article
-                key={panel.title}
-                className="relative rounded-xl border border-dashed border-line bg-platinum/30 p-6"
-                aria-label={`${panel.title} — Phase 1`}
-              >
-                <span className="absolute top-4 right-4 rounded-full bg-charcoal px-2.5 py-1 text-[11px] font-bold tracking-wide text-platinum uppercase">
-                  Phase 1
-                </span>
-                <span
-                  className="flex h-11 w-11 items-center justify-center rounded-lg bg-platinum text-charcoal"
-                  aria-hidden="true"
+      <div className="mt-8">
+        <TerminationDemoButton projectId={id} />
+      </div>
+
+      <Section
+        id="specs-heading"
+        title="Intelligence specs"
+        action={
+          <Link
+            href={`/projects/${id}/specs/new`}
+            className="inline-flex min-h-[44px] cursor-pointer items-center gap-1.5 rounded-lg border border-line bg-paper px-4 py-2 text-sm font-semibold text-charcoal transition-colors duration-200 hover:border-charcoal hover:bg-platinum"
+          >
+            New spec
+            <ArrowRight className="h-4 w-4" aria-hidden="true" />
+          </Link>
+        }
+      >
+        {specs.length === 0 ? (
+          <EmptyState text="No specs yet. Describe a problem to start fabricating its intelligence." />
+        ) : (
+          <ul className="grid gap-4 sm:grid-cols-2">
+            {specs.map((spec) => (
+              <li key={spec.id}>
+                <Link
+                  href={`/projects/${id}/specs/${spec.id}`}
+                  className="block h-full rounded-xl border border-line bg-card p-5 transition-all duration-200 hover:border-charcoal hover:shadow-[0_4px_6px_rgba(0,0,0,0.1)]"
                 >
-                  <Icon className="h-5 w-5" />
-                </span>
-                <h3 className="mt-4 font-display text-lg font-bold text-charcoal">
-                  {panel.title}
-                </h3>
-                <p className="mt-2 text-sm leading-6 text-muted-ink">
-                  {panel.text}
+                  <div className="flex items-start justify-between gap-3">
+                    <h3 className="font-display text-lg font-bold text-charcoal">
+                      {spec.name}
+                    </h3>
+                    <StatusPill status={spec.status} />
+                  </div>
+                  <p className="mt-2 line-clamp-2 text-sm leading-6 text-muted-ink">
+                    {spec.problem_statement}
+                  </p>
+                  <p className="mt-3 text-xs font-semibold tracking-wide text-muted-ink uppercase">
+                    Primitive: {spec.intelligence_primitive.replace(/_/g, " ")}
+                  </p>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+        <Link
+          href={`/projects/${id}/datasets`}
+          className="mt-4 inline-flex min-h-[44px] items-center gap-2 rounded-lg border border-line bg-card px-4 py-2.5 text-sm font-semibold text-charcoal transition-colors duration-200 hover:border-charcoal hover:bg-platinum"
+        >
+          <Database className="h-4 w-4" aria-hidden="true" />
+          Datasets
+          <ArrowRight className="h-4 w-4" aria-hidden="true" />
+        </Link>
+      </Section>
+
+      <Section id="jobs-heading" title="Training jobs">
+        {jobs.length === 0 ? (
+          <EmptyState text="No training jobs yet. Jobs appear here when a strategy is scheduled for execution." />
+        ) : (
+          <div className="overflow-x-auto rounded-xl border border-line bg-card">
+            <table className="w-full min-w-[640px] text-left text-sm">
+              <thead>
+                <tr className="border-b border-line bg-platinum/40 text-xs tracking-wide text-muted-ink uppercase">
+                  <th scope="col" className="px-4 py-3 font-semibold">
+                    Job
+                  </th>
+                  <th scope="col" className="px-4 py-3 font-semibold">
+                    Status
+                  </th>
+                  <th scope="col" className="px-4 py-3 font-semibold">
+                    Updated
+                  </th>
+                  <th scope="col" className="px-4 py-3 font-semibold">
+                    Actions
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {jobs.map((job) => (
+                  <tr
+                    key={job.id}
+                    className="border-b border-line transition-colors duration-200 last:border-0 hover:bg-platinum/30"
+                  >
+                    <td className="px-4 py-3 font-semibold text-charcoal">
+                      {job.name}
+                      {job.error && (
+                        <span className="mt-1 block max-w-xs text-xs font-normal text-[#8f1d1d]">
+                          {job.error}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <StatusPill status={job.status} />
+                    </td>
+                    <td className="px-4 py-3 text-muted-ink">
+                      {formatDateTime(job.updated_at)}
+                    </td>
+                    <td className="px-4 py-3">
+                      <JobTransitionButtons
+                        jobId={job.id}
+                        status={job.status}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Section>
+
+      <Section id="evaluations-heading" title="Evaluations">
+        {evaluations.length === 0 ? (
+          <EmptyState text="No evaluations yet. Run a baseline evaluation from a spec to set the bar to beat." />
+        ) : (
+          <ul className="grid gap-4 sm:grid-cols-2">
+            {evaluations.map((evaluation) => (
+              <li
+                key={evaluation.id}
+                className="rounded-xl border border-line bg-card p-5"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <h3 className="font-display text-base font-bold text-charcoal">
+                    {evaluation.name}
+                  </h3>
+                  <StatusPill status={evaluation.status} />
+                </div>
+                <p className="mt-1 text-xs text-muted-ink">
+                  {formatDateTime(evaluation.created_at)}
                 </p>
-              </article>
-            );
-          })}
+                {evaluation.results && (
+                  <dl className="mt-3 grid grid-cols-2 gap-3 border-t border-line pt-3 text-sm">
+                    <div>
+                      <dt className="text-xs font-semibold text-muted-ink">
+                        Best baseline
+                      </dt>
+                      <dd className="mt-0.5 font-semibold text-charcoal">
+                        {evaluation.results.baselines.length > 0
+                          ? evaluation.results.baselines.reduce((a, b) =>
+                              (b.accuracy ?? -1) > (a.accuracy ?? -1) ? b : a,
+                            ).name
+                          : "—"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs font-semibold text-muted-ink">
+                        Bar to beat
+                      </dt>
+                      <dd className="mt-0.5 font-semibold text-charcoal">
+                        {formatPercent(evaluation.results.bar_to_beat.accuracy)}{" "}
+                        accuracy
+                      </dd>
+                    </div>
+                  </dl>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Section>
+
+      <Section id="usage-heading" title="Usage">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="rounded-xl border border-line bg-card p-5">
+            <p className="text-xs font-semibold tracking-wide text-muted-ink uppercase">
+              Total cost
+            </p>
+            <p className="mt-2 font-display text-3xl font-bold text-charcoal">
+              ${usage.total_cost_usd.toFixed(2)}
+            </p>
+          </div>
+          <div className="rounded-xl border border-line bg-card p-5">
+            <p className="text-xs font-semibold tracking-wide text-muted-ink uppercase">
+              Events recorded
+            </p>
+            <p className="mt-2 font-display text-3xl font-bold text-charcoal">
+              {usage.event_count}
+            </p>
+          </div>
+          <div className="rounded-xl border border-line bg-card p-5">
+            <p className="text-xs font-semibold tracking-wide text-muted-ink uppercase">
+              By kind
+            </p>
+            <ul className="mt-2 space-y-1 text-sm text-charcoal">
+              {Object.entries(usage.by_kind).length === 0 ? (
+                <li className="text-muted-ink">No usage yet.</li>
+              ) : (
+                Object.entries(usage.by_kind).map(([kind, cost]) => (
+                  <li key={kind} className="flex justify-between gap-2">
+                    <span>{kind}</span>
+                    <span className="font-semibold">${cost.toFixed(2)}</span>
+                  </li>
+                ))
+              )}
+            </ul>
+          </div>
+          <div className="rounded-xl border border-line bg-card p-5">
+            <p className="text-xs font-semibold tracking-wide text-muted-ink uppercase">
+              By scope
+            </p>
+            <ul className="mt-2 space-y-1 text-sm text-charcoal">
+              {Object.entries(usage.by_scope).length === 0 ? (
+                <li className="text-muted-ink">No usage yet.</li>
+              ) : (
+                Object.entries(usage.by_scope).map(([scope, cost]) => (
+                  <li key={scope} className="flex justify-between gap-2">
+                    <span>{scope.replace(/_/g, " ")}</span>
+                    <span className="font-semibold">${cost.toFixed(2)}</span>
+                  </li>
+                ))
+              )}
+            </ul>
+          </div>
         </div>
-      </section>
+      </Section>
     </div>
   );
 }
