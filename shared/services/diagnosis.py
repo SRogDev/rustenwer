@@ -110,8 +110,10 @@ def diagnose_spec(spec: IntelligenceSpec) -> DiagnosisResult:
         candidate_approaches.append("hand-written deterministic function (no model)")
 
     data_requirements = [
-        f"Labeled examples: ({', '.join(input_keys) or 'inputs'})"
-        f" -> ({', '.join(output_keys) or 'outputs'})",
+        (
+            f"Labeled examples: ({', '.join(input_keys) or 'inputs'})"
+            f" -> ({', '.join(output_keys) or 'outputs'})"
+        ),
         "Train/validation/test split with no leakage between splits",
         "Label definitions reviewed by a human",
     ]
