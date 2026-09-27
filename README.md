@@ -139,4 +139,7 @@ to mock data only when the API is unreachable.
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+**Elastic License 2.0** — see [LICENSE](./LICENSE). Source-available, not
+OSI open source: you may view, use, copy, and modify the code (including
+for internal commercial use), but you may **not** offer it to third parties
+as a hosted or managed service that competes with Rustenwer.
