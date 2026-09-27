@@ -93,20 +93,27 @@ cp .env.example .env.local   # NEXT_PUBLIC_API_URL=http://localhost:8000
 npm run dev
 ```
 
-Phase 0 is intentionally honest about what's real: the API serves projects from
-an in-memory store behind a repository interface (Supabase wiring lands in
-Phase 1), and auth accepts any well-formed Bearer token with a stub identity
-until a Supabase project exists. The web UI calls the real API and falls back
-to mock data only when the API is unreachable.
+Phase 1 is intentionally honest about what's real: the API serves everything
+from in-memory stores behind repository interfaces (Supabase wiring still
+lands once a Supabase project exists — migrations 001+002 are the canonical
+schema), auth accepts any well-formed Bearer token with a stub identity,
+and real GPU training execution waits for Phase 2. The LangGraph agents run
+on deterministic fixtures (no LLM keys exist). The web UI calls the real API
+and falls back to mock data only when the API is unreachable.
 
 ## Phase roadmap
 
 - [x] **Phase 0 — Repository Foundation**: Next.js app, FastAPI backend,
   Supabase schema (organizations/users/projects), LangGraph skeleton, shared
   types, auth stub, project model, logging, config.
-- [ ] **Phase 1 — Core MVP**: projects, IntelligenceSpec, datasets, training
-  jobs, models, evaluations, deployments + Specification/Dataset/Training/
-  Evaluation/Supervisor agents.
+- [x] **Phase 1 — Core MVP** (2026-09-26): IntelligenceSpec CRUD + diagnosis
+  (incl. the "no ML needed" conclusion), datasets + versioning + validation
+  (schema/leakage/imbalance/splits), training-job lifecycle
+  (CREATED→…→COMPLETED, pausable/cancellable), baselines-first evaluation
+  (majority/keyword/deterministic, bar_to_beat), model registry, deployments,
+  usage/cost tracking, demo fixture endpoint — plus real LangGraph nodes
+  (Specification, Dataset, Training Strategy, Evaluation, Supervisor) and
+  the spec wizard / datasets / dashboard UI in platinum.
 - [ ] **Phase 2 — Training Infrastructure**: GPU provisioning, job queue,
   workers, LoRA/QLoRA, checkpointing, artifacts.
 - [ ] **Phase 3 — Evaluation & Registry**: benchmarks, evaluation runner,

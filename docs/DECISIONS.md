@@ -2,6 +2,30 @@
 
 Durable decisions made during the build. New entries go on top.
 
+## 2026-09-26 — Phase 1 integration (coordinator)
+
+- **In-memory repos kept for Phase 1** (no Supabase credentials exist);
+  migrations 001+002 are the canonical schema, swap is a later job.
+- **Contract fix**: `TrainingStrategy.architecture` is a structured
+  `dict`/`Record`, not a string (plan §9 treats architectures as composable
+  structures).
+- **Spec auto-detect**: `POST /specs` accepts omitting
+  `intelligence_primitive` → keyword-based `detect_primitive()` in
+  `shared/services/diagnosis.py` (falls back to `decision`); the Diagnostic
+  Agent refines it at `/diagnose`.
+- **Baseline notes**: `BaselineReport` has no `recommendation` field — the
+  unusable-labels note lives in each baseline's `description` and in
+  `EvaluationResults.recommendation`. `propose_strategy`'s `dataset_ref`
+  carries the dataset *version UUID* (consistent with
+  `Evaluation.dataset_version_id`).
+- **Deployment cancel** = transition to `ARCHIVED` from any state
+  (`DeploymentStatus` has no CANCELLED).
+- Verified: API 84/84 pytest, ruff clean; agents 23/23 pytest + `demo.py`
+  end-to-end green; `npm run build` + `tsc` + `biome` green; live-server
+  e2e (spec→diagnose→approve→dataset→evaluate→job lifecycle→usage→demo)
+  all 200s. Migration 002 never executed against a live DB (no credentials)
+  — syntax sanity-checked only.
+
 ## 2026-09-26 — License: MIT → Elastic License 2.0
 
 - **Roger's decision: Elastic License 2.0** (source-available, not OSI open
