@@ -449,6 +449,34 @@ def list_intelligence_versions(
 
 
 @router.get(
+    "/intelligence-versions/{version_id}",
+    response_model=IntelligenceVersionDetail,
+)
+def get_intelligence_version_by_id(
+    version_id: UUID,
+    intelligence_repository: IntelligenceRepository = Depends(get_intelligence_repository),
+    project_repository: ProjectRepository = Depends(get_project_repository),
+    # Any: the app.models ModelRepository Protocol (see get_model_repository_hook).
+    model_repository: Any = Depends(get_model_repository_hook),
+    user: ApiUser = Depends(get_current_user),
+) -> IntelligenceVersionDetail:
+    """One intelligence version by its immutable id, lineage resolved.
+
+    Used by deployment detail pages: a deployment pins a version id, not
+    an (intelligence, number) pair.
+    """
+    version = intelligence_repository.get_version_by_id(version_id)
+    if version is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Intelligence version not found"
+        )
+    _get_intelligence_or_404(
+        intelligence_repository, project_repository, version.intelligence_id, user
+    )
+    return _resolve_version(version, model_repository)
+
+
+@router.get(
     "/intelligences/{intelligence_id}/versions/{version}",
     response_model=IntelligenceVersionDetail,
 )

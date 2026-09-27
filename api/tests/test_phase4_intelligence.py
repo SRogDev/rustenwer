@@ -200,6 +200,31 @@ def test_duplicate_version_number_rejected_at_repository(
 
 
 # --------------------------------------------------------------------------
+# Version lookup by immutable id
+# --------------------------------------------------------------------------
+
+
+def test_get_version_by_id(
+    client: TestClient, auth_headers: dict[str, str], intelligence_id: UUID
+) -> None:
+    version = _publish(
+        client, auth_headers, intelligence_id, _termination_architecture()
+    )
+    resp = client.get(
+        f"/api/v1/intelligence-versions/{version['id']}", headers=auth_headers
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["id"] == version["id"]
+    assert body["version"] == 1
+
+    resp = client.get(
+        f"/api/v1/intelligence-versions/{uuid4()}", headers=auth_headers
+    )
+    assert resp.status_code == 404, resp.text
+
+
+# --------------------------------------------------------------------------
 # Version diff
 # --------------------------------------------------------------------------
 
