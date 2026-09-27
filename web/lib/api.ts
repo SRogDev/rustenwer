@@ -11,7 +11,9 @@
  */
 import type {
   ArtifactRecord,
+  Benchmark,
   CheckpointInfo,
+  ComparisonReport,
   Dataset,
   DatasetReport,
   DatasetVersion,
@@ -19,16 +21,21 @@ import type {
   DeploymentStatus,
   DiagnosisResult,
   Evaluation,
+  EvaluationRun,
+  Intelligence,
   IntelligencePrimitive,
   IntelligenceSpec,
+  IntelligenceVersion,
   JobStatus,
   MetricSeries,
   Model,
   ModelVersion,
   Project,
   ProjectStatus,
+  QualityVector,
   RunCost,
   RunMetrics,
+  SubjectKind,
   TrainingJob,
   TrainingRun,
   TrainingStrategy,
@@ -1068,4 +1075,505 @@ export const MOCK_RUN_COST: Record<string, RunCost> = {
     usd: 1.2708,
     rate_usd_per_hour: 2.5,
   },
+};
+
+// ---------------------------------------------------------------------------
+// Phase 3 — Evaluation & Registry clients.
+// Contract: `shared/README.md` "Phase 3 — Evaluation & Registry" + "Cost"
+// tables. The backend endpoints are finalized per the Phase 3 contract;
+// types come from `shared/types.ts` (single source of truth).
+// ---------------------------------------------------------------------------
+
+/** Per-scope cost rollups (GET /api/v1/projects/{project_id}/usage/rollups). */
+export interface UsageRollups {
+  total_cost_usd: number;
+  by_scope: Record<
+    string,
+    {
+      total_cost_usd: number;
+      by_kind: Record<string, number>;
+      event_count: number;
+    }
+  >;
+  by_kind: Record<string, number>;
+  event_count: number;
+}
+
+/** One subject for the compare endpoint. */
+export interface CompareSubjectInput {
+  kind: SubjectKind;
+  ref?: string | null;
+}
+
+/** Payload for POST /api/v1/projects/{project_id}/benchmarks. */
+export interface CreateBenchmarkInput {
+  name: string;
+  description?: string;
+  input_spec?: Record<string, unknown>;
+  expected_output?: Record<string, unknown>;
+  evaluation_function?: string;
+  dataset_version_id?: string | null;
+  metrics?: string[];
+  cost_rules?: Record<string, unknown>;
+}
+
+/** Seeded + project benchmarks. */
+export async function listBenchmarks(projectId: string): Promise<Benchmark[]> {
+  return request<Benchmark[]>(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/benchmarks`,
+  );
+}
+
+export async function createBenchmark(
+  projectId: string,
+  input: CreateBenchmarkInput,
+): Promise<Benchmark> {
+  return request<Benchmark>(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/benchmarks`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export async function getBenchmark(benchmarkId: string): Promise<Benchmark> {
+  return request<Benchmark>(
+    `/api/v1/benchmarks/${encodeURIComponent(benchmarkId)}`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+/** Payload for POST /api/v1/benchmarks/{benchmark_id}/runs. */
+export interface StartEvaluationRunInput {
+  spec_id?: string | null;
+  name?: string;
+  subject: CompareSubjectInput;
+}
+
+/**
+ * Starts an async evaluation of a subject on a benchmark → 201 EvaluationRun.
+ * Subject kinds: 'baseline' (ref = baseline name), 'model_version'
+ * (ref = model version id), 'reference' (ref = external reference id).
+ */
+export async function startEvaluationRun(
+  benchmarkId: string,
+  input: StartEvaluationRunInput,
+): Promise<EvaluationRun> {
+  return request<EvaluationRun>(
+    `/api/v1/benchmarks/${encodeURIComponent(benchmarkId)}/runs`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export async function listEvaluationRuns(
+  projectId: string,
+): Promise<EvaluationRun[]> {
+  return request<EvaluationRun[]>(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/evaluation-runs`,
+  );
+}
+
+export async function getEvaluationRun(runId: string): Promise<EvaluationRun> {
+  return request<EvaluationRun>(
+    `/api/v1/evaluation-runs/${encodeURIComponent(runId)}`,
+  );
+}
+
+/** Cancels a PENDING/RUNNING evaluation run → CANCELLED. */
+export async function cancelEvaluationRun(
+  runId: string,
+): Promise<EvaluationRun> {
+  return request<EvaluationRun>(
+    `/api/v1/evaluation-runs/${encodeURIComponent(runId)}/cancel`,
+    { method: "POST" },
+  );
+}
+
+/** Payload for POST /api/v1/benchmarks/{benchmark_id}/compare. */
+export interface CompareBenchmarkInput {
+  spec_id?: string | null;
+  subjects: CompareSubjectInput[];
+  incumbent_intelligence_version_id?: string | null;
+}
+
+/** Candidate vs baselines vs incumbent comparison → ComparisonReport. */
+export async function compareBenchmark(
+  benchmarkId: string,
+  input: CompareBenchmarkInput,
+): Promise<ComparisonReport> {
+  return request<ComparisonReport>(
+    `/api/v1/benchmarks/${encodeURIComponent(benchmarkId)}/compare`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+/** One model version with its lineage. */
+export async function getModelVersion(
+  modelId: string,
+  version: number,
+): Promise<ModelVersion> {
+  return request<ModelVersion>(
+    `/api/v1/models/${encodeURIComponent(modelId)}/versions/${version}`,
+  );
+}
+
+/** One pairwise change between two model versions. */
+export interface ModelVersionChange {
+  from_version: number;
+  to_version: number;
+  summary: string | null;
+  /** Field-level changes; values are JSON-stringified for display. */
+  fields: Array<{ field: string; from: string; to: string }>;
+}
+
+/** Version chain + what changed between versions. */
+export interface ModelLineage {
+  model_id: string;
+  versions: ModelVersion[];
+  changes: ModelVersionChange[];
+}
+
+export async function getModelLineage(modelId: string): Promise<ModelLineage> {
+  return request<ModelLineage>(
+    `/api/v1/models/${encodeURIComponent(modelId)}/lineage`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+/** Payload for POST /api/v1/projects/{project_id}/intelligences. */
+export interface CreateIntelligenceInput {
+  name: string;
+  description?: string;
+  primitive?: Intelligence["primitive"];
+}
+
+export async function listIntelligences(
+  projectId: string,
+): Promise<Intelligence[]> {
+  return request<Intelligence[]>(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/intelligences`,
+  );
+}
+
+export async function createIntelligence(
+  projectId: string,
+  input: CreateIntelligenceInput,
+): Promise<Intelligence> {
+  return request<Intelligence>(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/intelligences`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export async function getIntelligence(
+  intelligenceId: string,
+): Promise<Intelligence> {
+  return request<Intelligence>(
+    `/api/v1/intelligences/${encodeURIComponent(intelligenceId)}`,
+  );
+}
+
+/** Payload for POST /api/v1/intelligences/{intelligence_id}/versions. */
+export interface CreateIntelligenceVersionInput {
+  components: Record<string, unknown>;
+  notes?: string;
+  best_evaluation_run_id?: string | null;
+}
+
+export async function listIntelligenceVersions(
+  intelligenceId: string,
+): Promise<IntelligenceVersion[]> {
+  return request<IntelligenceVersion[]>(
+    `/api/v1/intelligences/${encodeURIComponent(intelligenceId)}/versions`,
+  );
+}
+
+export async function createIntelligenceVersion(
+  intelligenceId: string,
+  input: CreateIntelligenceVersionInput,
+): Promise<IntelligenceVersion> {
+  return request<IntelligenceVersion>(
+    `/api/v1/intelligences/${encodeURIComponent(intelligenceId)}/versions`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export async function getIntelligenceVersion(
+  intelligenceId: string,
+  version: number,
+): Promise<IntelligenceVersion> {
+  return request<IntelligenceVersion>(
+    `/api/v1/intelligences/${encodeURIComponent(intelligenceId)}/versions/${version}`,
+  );
+}
+
+/**
+ * Promote an intelligence version.
+ * Promotion logic lands in Phase 6: the backend answers 501. Callers should
+ * catch ApiError and surface its detail honestly instead of hiding it.
+ */
+export async function promoteIntelligence(
+  intelligenceId: string,
+  input: { version?: number } = {},
+): Promise<IntelligenceVersion> {
+  return request<IntelligenceVersion>(
+    `/api/v1/intelligences/${encodeURIComponent(intelligenceId)}/promote`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+/** Per-scope cost rollups (training_job, model, deployment, evaluation, inference). */
+export async function getUsageRollups(
+  projectId: string,
+): Promise<UsageRollups> {
+  return request<UsageRollups>(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/usage/rollups`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Mock fallback dataset (Phase 3 demo only).
+// Served ONLY when the API is unreachable; the UI labels it as mock data.
+// ---------------------------------------------------------------------------
+
+const MOCK_BENCHMARK_TERMINATION_ID = "d3d3d3d3-d3d3-d3d3-d3d3-d3d3d3d3d3d3";
+const MOCK_BENCHMARK_RING_ID = "e4e4e4e4-e4e4-e4e4-e4e4-e4e4e4e4e4e4";
+const MOCK_MODEL_ID = "f5f5f5f5-f5f5-f5f5-f5f5-f5f5f5f5f5f5";
+const MOCK_MODEL_V1_ID = "a1a1a1a1-a1a1-a1a1-a1a1-a1a1a1a1a1a1";
+const MOCK_MODEL_V2_ID = "b2b2b2b2-b2b2-b2b2-b2b2-b2b2b2b2b2b2";
+const MOCK_INTELLIGENCE_ID = "c3c3c3c3-c3c3-c3c3-c3c3-c3c3c3c3c3c3";
+const MOCK_EVAL_RUN_DONE_ID = "dd11dd11-dd11-dd11-dd11-dd11dd11dd11";
+const MOCK_EVAL_RUN_RUNNING_ID = "ee22ee22-ee22-ee22-ee22-ee22ee22ee22";
+const MOCK_EVAL_RUN_FAILED_ID = "ff33ff33-ff33-ff33-ff33-ff33ff33ff33";
+
+export const MOCK_BENCHMARKS: Benchmark[] = [
+  {
+    id: MOCK_BENCHMARK_TERMINATION_ID,
+    project_id: "11111111-1111-1111-1111-111111111111",
+    name: "termination",
+    description:
+      "Seeded benchmark: decide when an autonomous search has gathered enough and should stop. 12 labeled search steps; the bar to beat is the deterministic_rule baseline at 91.7% accuracy.",
+    input_spec: {
+      search_state: { type: "object" },
+      state_summary: { type: "string" },
+      depth: { type: "integer" },
+      progress_score: { type: "number" },
+    },
+    expected_output: {
+      decision: { enum: ["continue", "stop"] },
+      confidence: { type: "number" },
+    },
+    evaluation_function: "accuracy_on_labeled_steps",
+    dataset_version_id: MOCK_VERSION_ID,
+    metrics: ["accuracy", "latency_ms_p50", "cost_usd_per_1k"],
+    cost_rules: { inference_cost_usd_per_1k: 0 },
+    created_at: "2026-09-26T09:50:00Z",
+  },
+  {
+    id: MOCK_BENCHMARK_RING_ID,
+    project_id: "11111111-1111-1111-1111-111111111111",
+    name: "ring",
+    description:
+      "Seeded benchmark: route inbound items around the ring topology with minimal hops and no dropped messages.",
+    input_spec: { item: { type: "object" }, ring_state: { type: "object" } },
+    expected_output: {
+      next_hop: { type: "string" },
+      drop: { type: "boolean" },
+    },
+    evaluation_function: "delivery_ratio_and_mean_hops",
+    dataset_version_id: null,
+    metrics: ["delivery_ratio", "mean_hops", "latency_ms_p50"],
+    cost_rules: { inference_cost_usd_per_1k: 0 },
+    created_at: "2026-09-26T09:50:00Z",
+  },
+];
+
+const MOCK_QV_V2: QualityVector = {
+  task_quality: 0.9583,
+  calibration: 0.91,
+  robustness: 0.88,
+  latency_ms_p50: 0.31,
+  latency_ms_p99: 1.2,
+  inference_cost_usd_per_1k: 0.0004,
+  training_cost_usd: 5.12,
+  model_size_bytes: 482344960,
+  reliability: 0.99,
+};
+
+export const MOCK_EVAL_RUNS: EvaluationRun[] = [
+  {
+    id: MOCK_EVAL_RUN_DONE_ID,
+    project_id: "11111111-1111-1111-1111-111111111111",
+    benchmark_id: MOCK_BENCHMARK_TERMINATION_ID,
+    spec_id: MOCK_SPEC_ID,
+    name: "termination classifier v2",
+    subject: {
+      kind: "model_version",
+      ref: MOCK_MODEL_V2_ID,
+      quality_vector: MOCK_QV_V2,
+    },
+    status: "COMPLETED",
+    quality_vector: MOCK_QV_V2,
+    metrics: { accuracy: 0.9583, evaluated_steps: 12 },
+    cost_usd: 0.0042,
+    error: null,
+    created_at: "2026-09-26T12:05:00Z",
+    completed_at: "2026-09-26T12:07:33Z",
+  },
+  {
+    id: MOCK_EVAL_RUN_RUNNING_ID,
+    project_id: "11111111-1111-1111-1111-111111111111",
+    benchmark_id: MOCK_BENCHMARK_TERMINATION_ID,
+    spec_id: MOCK_SPEC_ID,
+    name: "deterministic_rule re-check",
+    subject: {
+      kind: "baseline",
+      ref: "deterministic_rule",
+      quality_vector: null,
+    },
+    status: "RUNNING",
+    quality_vector: null,
+    metrics: {},
+    cost_usd: 0,
+    error: null,
+    created_at: "2026-09-26T12:30:00Z",
+    completed_at: null,
+  },
+  {
+    id: MOCK_EVAL_RUN_FAILED_ID,
+    project_id: "11111111-1111-1111-1111-111111111111",
+    benchmark_id: MOCK_BENCHMARK_RING_ID,
+    spec_id: null,
+    name: "ring heuristic attempt",
+    subject: { kind: "baseline", ref: "greedy_ring", quality_vector: null },
+    status: "FAILED",
+    quality_vector: null,
+    metrics: {},
+    cost_usd: 0.0011,
+    error:
+      "evaluation_function crashed on row 7: 'next_hop' missing from subject output",
+    created_at: "2026-09-26T13:00:00Z",
+    completed_at: "2026-09-26T13:01:12Z",
+  },
+];
+
+export const MOCK_MODELS: Model[] = [
+  {
+    id: MOCK_MODEL_ID,
+    project_id: "11111111-1111-1111-1111-111111111111",
+    name: "termination-embedding-classifier",
+    description:
+      "Learned policy for the search-termination decision; must beat the deterministic_rule baseline.",
+    created_at: "2026-09-26T10:30:00Z",
+  },
+];
+
+export const MOCK_MODEL_VERSIONS: ModelVersion[] = [
+  {
+    id: MOCK_MODEL_V1_ID,
+    model_id: MOCK_MODEL_ID,
+    version: 1,
+    training_run_id: "b1b1b1b1-b1b1-b1b1-b1b1-b1b1b1b1b1b1",
+    architecture: { type: "embedding-classifier", hidden: 128 },
+    size_bytes: 241172480,
+    metrics: { val_accuracy: 0.91 },
+    artifact_uri: "artifacts://encoder-adapter/1",
+    dataset_version_id: MOCK_VERSION_ID,
+    training_strategy: { training_method: "embedding-ft", epochs: 2 },
+    code_version: "rustenwer@a1b2c3",
+    template_version: "trainer@1.0.0",
+    seed: 7,
+    base_model: "tiny-encoder-v1",
+    lineage_locked: true,
+    created_at: "2026-09-26T10:45:00Z",
+  },
+  {
+    id: MOCK_MODEL_V2_ID,
+    model_id: MOCK_MODEL_ID,
+    version: 2,
+    training_run_id: "c2c2c2c2-c2c2-c2c2-c2c2-c2c2c2c2c2c2",
+    architecture: { type: "embedding-classifier", hidden: 256 },
+    size_bytes: 482344960,
+    metrics: { val_accuracy: 0.9583 },
+    artifact_uri: "artifacts://encoder-adapter/3",
+    dataset_version_id: MOCK_VERSION_ID,
+    training_strategy: { training_method: "embedding-ft", epochs: 3 },
+    code_version: "rustenwer@d4e5f6",
+    template_version: "trainer@1.1.0",
+    seed: 7,
+    base_model: "tiny-encoder-v1",
+    lineage_locked: true,
+    created_at: "2026-09-26T11:04:12Z",
+  },
+];
+
+export const MOCK_INTELLIGENCES: Intelligence[] = [
+  {
+    id: MOCK_INTELLIGENCE_ID,
+    project_id: "11111111-1111-1111-1111-111111111111",
+    name: "search-termination",
+    description:
+      "Executable cognitive system that stops an autonomous search at the right time.",
+    primitive: "termination",
+    created_at: "2026-09-26T12:10:00Z",
+  },
+];
+
+export const MOCK_INTELLIGENCE_VERSIONS: IntelligenceVersion[] = [
+  {
+    id: "iv1iv1iv-iv1i-iv1i-iv1i-iv1iv1iv1iv1",
+    intelligence_id: MOCK_INTELLIGENCE_ID,
+    version: 1,
+    components: {
+      models: [{ name: "termination-embedding-classifier", version: 1 }],
+      baselines: ["deterministic_rule"],
+      harness: "decision-harness@0.9.0",
+    },
+    notes: "First packaged intelligence: v1 model behind the decision harness.",
+    best_evaluation_run_id: null,
+    status: "ACTIVE",
+    created_at: "2026-09-26T12:12:00Z",
+  },
+  {
+    id: "iv2iv2iv-iv2i-iv2i-iv2i-iv2iv2iv2iv2",
+    intelligence_id: MOCK_INTELLIGENCE_ID,
+    version: 2,
+    components: {
+      models: [{ name: "termination-embedding-classifier", version: 2 }],
+      baselines: ["deterministic_rule", "keyword_heuristic"],
+      harness: "decision-harness@1.0.0",
+    },
+    notes:
+      "v2 model (95.8% on the termination benchmark) with the hardened harness.",
+    best_evaluation_run_id: MOCK_EVAL_RUN_DONE_ID,
+    status: "ACTIVE",
+    created_at: "2026-09-26T12:40:00Z",
+  },
+];
+
+export const MOCK_USAGE_ROLLUPS: UsageRollups = {
+  total_cost_usd: 18.775,
+  by_scope: {
+    training_job: {
+      total_cost_usd: 12.4,
+      by_kind: { training: 12.4 },
+      event_count: 7,
+    },
+    evaluation: {
+      total_cost_usd: 5.125,
+      by_kind: { evaluation: 5.125 },
+      event_count: 3,
+    },
+    model: {
+      total_cost_usd: 1.25,
+      by_kind: { storage: 1.25 },
+      event_count: 2,
+    },
+  },
+  by_kind: { training: 12.4, evaluation: 5.125, storage: 1.25 },
+  event_count: 12,
 };

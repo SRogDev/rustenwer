@@ -1,4 +1,4 @@
-import { ArrowLeft, ArrowRight, Database } from "lucide-react";
+import { ArrowLeft, ArrowRight, Boxes, Database } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -14,8 +14,10 @@ import { OfflineBanner } from "../../../components/OfflineBanner";
 import { StatusBadge } from "../../../components/StatusBadge";
 import { StatusPill } from "../../../components/StatusPill";
 import { TerminationDemoButton } from "../../../components/TerminationDemoButton";
+import type { UsageRollups } from "../../../lib/api";
 import {
   getProject,
+  getUsageRollups,
   getUsageSummary,
   isApiOfflineError,
   listEvaluations,
@@ -25,6 +27,7 @@ import {
   MOCK_PROJECTS,
   MOCK_SPECS,
   MOCK_TRAINING_JOBS,
+  MOCK_USAGE_ROLLUPS,
   MOCK_USAGE_SUMMARY,
 } from "../../../lib/api";
 
@@ -103,6 +106,78 @@ function EmptyState({ text }: { text: string }) {
   );
 }
 
+function CostRollupsSection({ rollups }: { rollups: UsageRollups }) {
+  const scopes = Object.entries(rollups.by_scope);
+  const maxScopeCost = Math.max(0, ...scopes.map(([, s]) => s.total_cost_usd));
+  return (
+    <Section id="cost-rollups-heading" title="Cost rollups">
+      <div className="grid gap-4 lg:grid-cols-3">
+        <div className="rounded-xl border border-line bg-card p-5">
+          <p className="text-xs font-semibold tracking-wide text-muted-ink uppercase">
+            Total cost
+          </p>
+          <p className="mt-2 font-display text-3xl font-bold text-charcoal">
+            ${rollups.total_cost_usd.toFixed(2)}
+          </p>
+          <p className="mt-1 text-sm text-muted-ink">
+            {rollups.event_count} events across{" "}
+            {Object.keys(rollups.by_kind).length} kinds
+          </p>
+        </div>
+        <div className="rounded-xl border border-line bg-card p-5 lg:col-span-2">
+          <p className="text-xs font-semibold tracking-wide text-muted-ink uppercase">
+            By scope
+          </p>
+          {scopes.length === 0 ? (
+            <p className="mt-2 text-sm text-muted-ink">
+              No cost events recorded yet.
+            </p>
+          ) : (
+            <ul className="mt-3 space-y-3">
+              {scopes.map(([scope, data]) => {
+                const width =
+                  maxScopeCost > 0
+                    ? Math.max(2, (data.total_cost_usd / maxScopeCost) * 100)
+                    : 0;
+                return (
+                  <li key={scope}>
+                    <div className="flex items-baseline justify-between gap-2 text-sm">
+                      <span className="font-semibold text-charcoal">
+                        {scope.replace(/_/g, " ")}
+                      </span>
+                      <span className="text-muted-ink">
+                        ${data.total_cost_usd.toFixed(2)} · {data.event_count}{" "}
+                        events
+                      </span>
+                    </div>
+                    <div
+                      className="mt-1 h-2.5 overflow-hidden rounded-full bg-platinum"
+                      role="img"
+                      aria-label={`${scope} cost $${data.total_cost_usd.toFixed(2)}`}
+                    >
+                      <div
+                        className="h-full rounded-full bg-charcoal transition-[width] duration-300"
+                        style={{ width: `${width}%` }}
+                      />
+                    </div>
+                    {Object.keys(data.by_kind).length > 0 && (
+                      <p className="mt-1 text-xs text-muted-ink">
+                        {Object.entries(data.by_kind)
+                          .map(([kind, cost]) => `${kind}: $${cost.toFixed(2)}`)
+                          .join(" · ")}
+                      </p>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      </div>
+    </Section>
+  );
+}
+
 export default async function ProjectDetailPage({
   params,
 }: {
@@ -116,26 +191,28 @@ export default async function ProjectDetailPage({
     : projectResult.data;
   if (!project) notFound();
 
-  const [specsResult, jobsResult, evalsResult, usageResult] = await Promise.all(
-    [
+  const [specsResult, jobsResult, evalsResult, usageResult, rollupsResult] =
+    await Promise.all([
       withOffline(() => listSpecs(id), MOCK_SPECS),
       withOffline(() => listTrainingJobs(id), MOCK_TRAINING_JOBS),
       withOffline(() => listEvaluations(id), MOCK_EVALUATIONS),
       withOffline(() => getUsageSummary(id), MOCK_USAGE_SUMMARY),
-    ],
-  );
+      withOffline(() => getUsageRollups(id), MOCK_USAGE_ROLLUPS),
+    ]);
 
   const offline =
     projectResult.offline ||
     specsResult.offline ||
     jobsResult.offline ||
     evalsResult.offline ||
-    usageResult.offline;
+    usageResult.offline ||
+    rollupsResult.offline;
 
   const specs: IntelligenceSpec[] = specsResult.data;
   const jobs: TrainingJob[] = jobsResult.data;
   const evaluations: Evaluation[] = evalsResult.data;
   const usage: UsageSummary = usageResult.data;
+  const rollups: UsageRollups = rollupsResult.data;
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6 sm:py-14">
@@ -187,8 +264,16 @@ export default async function ProjectDetailPage({
         </dl>
       </div>
 
-      <div className="mt-8">
+      <div className="mt-8 flex flex-wrap gap-3">
         <TerminationDemoButton projectId={id} />
+        <Link
+          href={`/projects/${id}/registry`}
+          className="inline-flex min-h-[44px] items-center gap-2 rounded-lg border border-line bg-card px-4 py-2.5 text-sm font-semibold text-charcoal transition-colors duration-200 hover:border-charcoal hover:bg-platinum"
+        >
+          <Boxes className="h-4 w-4" aria-hidden="true" />
+          Registry
+          <ArrowRight className="h-4 w-4" aria-hidden="true" />
+        </Link>
       </div>
 
       <Section
@@ -407,6 +492,8 @@ export default async function ProjectDetailPage({
           </div>
         </div>
       </Section>
+
+      <CostRollupsSection rollups={rollups} />
     </div>
   );
 }
