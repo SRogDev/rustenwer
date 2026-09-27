@@ -161,8 +161,19 @@ and falls back to mock data only when the API is unreachable.
   ring-benchmark quality vector (task 0.975, cal 0.894) → beat all baselines
   in comparison → intelligence v1 pinning the model → evaluation costs in
   rollups. 218+23 tests green.
-- [ ] **Phase 4 — Intelligence Abstraction**: Intelligence as first-class
-  artifact, deploy an Intelligence (not a Model).
+- [x] **Phase 4 — Intelligence Abstraction** (2026-09-27): Intelligence as
+  first-class executable artifact — validated immutable architecture
+  snapshots (8 component kinds), version diff with reviewer notes,
+  hosted inference pipeline (input-schema validation, deterministic +
+  real-torch model components, primitive-shaped machine outputs),
+  `InferenceProvider` abstraction (hosted functional; external/GPU honest
+  501s), deployments serving an Intelligence version (back-compat
+  auto-wraps bare model deployments), per-inference usage events, and
+  the deployment UI (architecture diagram, diff viewer, deploy flow,
+  endpoint + curl, live infer console). Live E2E 21/21: deterministic
+  termination v1 (`progress_score <= 0.21 → stop`) deployed, activated,
+  and invoked over HTTP. 242+23 tests green; web tsc/Biome/build green.
+  Full record: docs/PHASE4.md (includes the Spanish deep-dive lesson).
 - [ ] **Phase 5 — Training Method Knowledge**: method registry + adapters.
 - [ ] **Phase 6 — Candidate Experiment Engine**: experiments, search
   strategies, promotion/rollback.

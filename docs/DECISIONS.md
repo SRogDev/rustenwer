@@ -140,3 +140,36 @@ Durable decisions made during the build. New entries go on top.
   the agent's own shell and SIGTERM'd it; the "restart" then silently
   failed to bind and the stale server kept serving. Kill test servers by
   PID captured at launch.
+
+## Phase 4 (2026-09-27) — Intelligence Abstraction
+
+- **Deployments target exactly one of intelligence_version_id / model_version_id.**
+  Phase-1 tests created deployments with no target; Phase 4 makes that a
+  409. The old tests now exercise the back-compat path (bare
+  model_version_id → auto-created single-model intelligence), which is the
+  honest migration story, not silent coercion.
+- **Back-compat auto-intelligences are named "<model name> (auto)" and pin
+  classes + feature key.** A bare model deployment is a classification
+  guess; the wrapper pins what inference needs (ordered classes,
+  feature_key, model version UUID). If the deploy payload carries no
+  classes, the auto-created intelligence has none pinned and inference
+  fails loudly at 502 — never silently.
+- **Provider abstraction is capability entries, not integrations.**
+  `external_api` / `local_gpu` answer 501 with "not configured" — adding
+  a real provider means registering an `InferenceProvider` implementation,
+  not changing the infer endpoint.
+- **Input schema violations are 422; component failures are 502; unconfigured
+  providers are 501.** The HTTP status tells the caller which layer broke:
+  their input, our execution, or our capability.
+- **Inference cost is honestly 0.0 for local CPU** and recorded as such;
+  a future GPU provider must record its real cost in the same event.
+- **Non-executable architecture kinds are rejected at publish time.**
+  `router` and `tool_graph` fail validation until Phase 7 rather than
+  failing at inference time — fail fast at the boundary where the user
+  can fix it.
+- **Sandbox quirk (httpx):** this runtime's `no_proxy` contains bracketed
+  IPv6 hosts, which crashes httpx URL parsing. Scripts driving the API
+  must use `httpx.Client(..., trust_env=False)` (see AGENTS.md).
+- **npm audit is environment-blocked** (registry audit endpoint unreachable
+  through the egress proxy); not a dependency problem, no new prod deps
+  were added in Phase 4.
