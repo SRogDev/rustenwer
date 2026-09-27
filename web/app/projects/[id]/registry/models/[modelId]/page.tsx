@@ -255,22 +255,15 @@ export default async function ModelDetailPage({
                 <li key={`${change.from_version}-${change.to_version}`}>
                   <p className="text-sm font-semibold text-charcoal">
                     v{change.from_version} → v{change.to_version}
-                    {change.summary ? `: ${change.summary}` : ""}
                   </p>
-                  {change.fields.length > 0 && (
-                    <dl className="mt-1 space-y-1 text-sm">
-                      {change.fields.map((field) => (
-                        <div
-                          key={field.field}
-                          className="flex flex-wrap gap-x-2 text-muted-ink"
-                        >
-                          <dt className="font-semibold">{field.field}:</dt>
-                          <dd className="font-mono text-[13px] break-all">
-                            {field.from} → {field.to}
-                          </dd>
-                        </div>
-                      ))}
-                    </dl>
+                  {change.changed_fields.length > 0 ? (
+                    <p className="mt-1 font-mono text-[13px] break-all text-muted-ink">
+                      {change.changed_fields.join(", ")}
+                    </p>
+                  ) : (
+                    <p className="mt-1 text-sm text-muted-ink">
+                      No lineage differences — metadata-only change.
+                    </p>
                   )}
                 </li>
               ))}

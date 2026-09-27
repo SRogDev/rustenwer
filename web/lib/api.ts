@@ -41,9 +41,13 @@ import type {
   TrainingStrategy,
   UsageEvent,
   UsageKind,
+  UsageRollups,
   UsageScope,
   UsageSummary,
 } from "../../shared/types";
+
+/** Re-exported so consumers can keep importing from the client module. */
+export type { ScopeRollup, UsageRollups } from "../../shared/types";
 
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -1085,19 +1089,7 @@ export const MOCK_RUN_COST: Record<string, RunCost> = {
 // ---------------------------------------------------------------------------
 
 /** Per-scope cost rollups (GET /api/v1/projects/{project_id}/usage/rollups). */
-export interface UsageRollups {
-  total_cost_usd: number;
-  by_scope: Record<
-    string,
-    {
-      total_cost_usd: number;
-      by_kind: Record<string, number>;
-      event_count: number;
-    }
-  >;
-  by_kind: Record<string, number>;
-  event_count: number;
-}
+/** Contract: `shared/types.ts` (`ScopeRollup`, `UsageRollups`) — single source of truth. */
 
 /** One subject for the compare endpoint. */
 export interface CompareSubjectInput {
@@ -1218,18 +1210,16 @@ export async function getModelVersion(
   );
 }
 
-/** One pairwise change between two model versions. */
+/** One pairwise change between two model versions (backend shape). */
 export interface ModelVersionChange {
   from_version: number;
   to_version: number;
-  summary: string | null;
-  /** Field-level changes; values are JSON-stringified for display. */
-  fields: Array<{ field: string; from: string; to: string }>;
+  /** Names of the lineage fields that differ between the two versions. */
+  changed_fields: string[];
 }
 
-/** Version chain + what changed between versions. */
+/** Version chain + what changed between versions (backend shape). */
 export interface ModelLineage {
-  model_id: string;
   versions: ModelVersion[];
   changes: ModelVersionChange[];
 }
@@ -1556,19 +1546,23 @@ export const MOCK_INTELLIGENCE_VERSIONS: IntelligenceVersion[] = [
 ];
 
 export const MOCK_USAGE_ROLLUPS: UsageRollups = {
+  project_id: "11111111-1111-1111-1111-111111111111",
   total_cost_usd: 18.775,
   by_scope: {
     training_job: {
+      scope: "training_job",
       total_cost_usd: 12.4,
       by_kind: { training: 12.4 },
       event_count: 7,
     },
     evaluation: {
+      scope: "evaluation",
       total_cost_usd: 5.125,
       by_kind: { evaluation: 5.125 },
       event_count: 3,
     },
     model: {
+      scope: "model",
       total_cost_usd: 1.25,
       by_kind: { storage: 1.25 },
       event_count: 2,
