@@ -107,3 +107,36 @@ Durable decisions made during the build. New entries go on top.
   (Rayleigh median threshold ≈ 1.1774) — the first imbalanced task let the
   model collapse to the majority class. SGD needs momentum 0.9 to learn it;
   plain SGD stalls. (A lesson about task design, not just code.)
+
+## Phase 3 (2026-09-27)
+- **Vector-valued benchmark rows blinded the baselines.** `_numeric_columns`
+  only recognized scalar columns, so on `x: [float, float]` rows every
+  baseline silently fell back to majority (0.535) while the true best
+  single-threshold scores 0.65 (verified with numpy). Fixed: fixed-length
+  list/tuple columns expand to `name[i]` pseudo-columns, resolved via
+  `_column_value`, in both `run_baselines` and the evaluation mirrors
+  (mirrors import the same helpers, so the mirror==aggregate pin holds).
+- **`beats_bar` is Pareto-strict** (task_quality AND latency AND cost vs
+  the bar) — the evaluation writer's tested contract, kept. Consequence:
+  trained models rarely beat the bar on latency vs microsecond
+  constant-time baselines, and the bit is jitter-sensitive at that scale.
+  The priority-ranked `winner` is the promotion-relevant signal; revisit
+  the gate in Phase 6 (epsilon tolerance or spec-budget-based).
+- **`UsageScope.EVALUATION` added** (Python + TS + migration 003 alters the
+  `usage_events.scope` check constraint). The evaluation runner's
+  `on_finish` records `scope=EVALUATION, scope_id=<run_id>`.
+- **No global quality weights, ever.** Ranking is lexicographic over
+  `spec.quality_requirements["priority"]`; unknown priority fields raise.
+- **Subject/benchmark mismatch fails the run** (`SubjectBenchmarkMismatch`
+  → FAILED); inside `compare` a mismatched subject is reported unscored
+  with the honest error in its metrics — negative evidence, not a 500.
+- **Promotion endpoint is an honest 501** until Phase 6; the web "Promote"
+  button renders the 501 detail instead of pretending.
+- **`_prepare_blobs` honors a `n_features` hyperparameter** (default 20,
+  backwards-compatible) so a classifier can train exactly the task a
+  2-float benchmark evaluates. Needed for the E2E, not a behavior change
+  for existing strategies.
+- **pkill footgun re-learned:** `pkill -f "uvicorn app.main:app"` matched
+  the agent's own shell and SIGTERM'd it; the "restart" then silently
+  failed to bind and the stale server kept serving. Kill test servers by
+  PID captured at launch.

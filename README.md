@@ -148,8 +148,19 @@ and falls back to mock data only when the API is unreachable.
   `DO_TOKEN` — never live-tested), and the training-job detail UI
   (run controls, live log viewer, SVG loss curve, checkpoints/artifacts/cost
   panels). 84+23 Phase-1 tests still green; ~60 new execution tests.
-- [ ] **Phase 3 — Evaluation & Registry**: benchmarks, evaluation runner,
-  model + intelligence registries, cost accounting.
+- [x] **Phase 3 — Evaluation & Registry** (2026-09-27): independent
+  evaluation runner (benchmarks incl. seeded `termination` + `ring`,
+  subject-independent scoring per Rule 11, cancellable runs, quality
+  vectors with hand-verified ECE, Pareto-strict `beats_bar`, no global
+  weights — priority-lexicographic ranking), baseline/incumbent comparison
+  reports, model registry with immutable versions + lineage diff, first-class
+  Intelligence registry (versions, resolved component lineage, honest 501
+  promote until Phase 6), per-scope cost rollups (`UsageScope.EVALUATION`
+  added), registry/evaluation/comparison/cost-rollup UI in platinum theme.
+  Live E2E 30/30: trained a real 2-feature MLP → registered with lineage →
+  ring-benchmark quality vector (task 0.975, cal 0.894) → beat all baselines
+  in comparison → intelligence v1 pinning the model → evaluation costs in
+  rollups. 218+23 tests green.
 - [ ] **Phase 4 — Intelligence Abstraction**: Intelligence as first-class
   artifact, deploy an Intelligence (not a Model).
 - [ ] **Phase 5 — Training Method Knowledge**: method registry + adapters.
