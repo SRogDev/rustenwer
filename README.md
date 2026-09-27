@@ -93,6 +93,28 @@ cp .env.example .env.local   # NEXT_PUBLIC_API_URL=http://localhost:8000
 npm run dev
 ```
 
+### Real training locally (Phase 2)
+
+The base API requirements stay torch-free; training needs the extras:
+
+```bash
+cd api
+source .venv/bin/activate
+pip install -r requirements-train.txt   # torch CPU + numpy
+```
+
+Then enqueue a job (`POST /api/v1/training-jobs/{id}/enqueue`,
+`{"provider": "local"}`): a worker thread claims it from the SQLite queue
+and trains in a real subprocess (`python -m app.training.runner`). Watch
+it at `/projects/{id}/jobs/{jobId}` — live logs, loss curve, checkpoints,
+artifacts, cost. Runtime data (queue DB, runs, artifacts) lives under
+`RUSTENWER_DATA_DIR` (default `api/data/`, git-ignored).
+
+DigitalOcean GPU training is code-complete but credential-blocked: without
+`DO_TOKEN` (+ `DO_SSH_KEY_IDS` / `DO_SSH_PRIVATE_KEY`) enqueueing with
+`"provider": "digitalocean"` is refused with 409 and nothing is billed.
+QLoRA likewise refuses on CPU — it needs CUDA plus unsloth/bitsandbytes.
+
 Phase 1 is intentionally honest about what's real: the API serves everything
 from in-memory stores behind repository interfaces (Supabase wiring still
 lands once a Supabase project exists — migrations 001+002 are the canonical
@@ -114,8 +136,18 @@ and falls back to mock data only when the API is unreachable.
   usage/cost tracking, demo fixture endpoint — plus real LangGraph nodes
   (Specification, Dataset, Training Strategy, Evaluation, Supervisor) and
   the spec wizard / datasets / dashboard UI in platinum.
-- [ ] **Phase 2 — Training Infrastructure**: GPU provisioning, job queue,
-  workers, LoRA/QLoRA, checkpointing, artifacts.
+- [x] **Phase 2 — Training Infrastructure** (2026-09-27): real local-CPU
+  training that actually runs — SQLite persistent queue, subprocess workers,
+  real PyTorch classifier + LoRA adapters (QLoRA code-complete but honestly
+  blocked: needs CUDA + unsloth/bitsandbytes), atomic checkpoints with
+  pause/resume/retry-from-checkpoint, immutable versioned artifact store
+  (SHA-256), JSONL event stream (logs/metrics/heartbeats) with SSE tail,
+  graceful cancel (SIGTERM) vs brutal kill detection, per-second cost
+  accounting, `ComputeProvider` abstraction (working `local` provider +
+  code-complete `digitalocean` GPU-droplet provider, refused without
+  `DO_TOKEN` — never live-tested), and the training-job detail UI
+  (run controls, live log viewer, SVG loss curve, checkpoints/artifacts/cost
+  panels). 84+23 Phase-1 tests still green; ~60 new execution tests.
 - [ ] **Phase 3 — Evaluation & Registry**: benchmarks, evaluation runner,
   model + intelligence registries, cost accounting.
 - [ ] **Phase 4 — Intelligence Abstraction**: Intelligence as first-class
