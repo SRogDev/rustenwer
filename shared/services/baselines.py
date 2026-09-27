@@ -7,6 +7,7 @@ mechanism (Rule 11) — it scores row data, never model internals.
 
 from __future__ import annotations
 
+import itertools
 import json
 from collections import Counter
 from datetime import UTC, datetime
@@ -31,7 +32,7 @@ def _majority_label(labels: list[Any]) -> Any | None:
     if not labels:
         return None
     counts = Counter(labels)
-    return sorted(counts.items(), key=lambda kv: (-kv[1], str(kv[0])))[0][0]
+    return min(counts.items(), key=lambda kv: (-kv[1], str(kv[0])))[0]
 
 
 def _accuracy(predictions: list[Any], truths: list[Any]) -> float | None:
@@ -67,7 +68,13 @@ def _text_column(rows: list[dict[str, Any]], label_column: str) -> str | None:
 
 
 def _numeric_columns(rows: list[dict[str, Any]], label_column: str) -> list[str]:
-    """Non-label numeric (int/float, not bool) columns, sorted by name."""
+    """Non-label numeric (int/float, not bool) columns, sorted by name.
+
+    Vector-valued columns (fixed-length lists/tuples of numbers, e.g. the
+    ring benchmark's ``x: [float, float]``) expand to indexed pseudo-columns
+    ``name[0]``, ``name[1]``, ... so threshold rules can see each dimension.
+    Resolve values with :func:`_column_value`.
+    """
     if not rows:
         return []
     columns = []
@@ -75,9 +82,37 @@ def _numeric_columns(rows: list[dict[str, Any]], label_column: str) -> list[str]
         if key == label_column:
             continue
         values = [row.get(key) for row in rows if row.get(key) is not None]
-        if values and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in values):
+        if not values:
+            continue
+        if all(
+            isinstance(v, (int, float)) and not isinstance(v, bool) for v in values
+        ):
             columns.append(key)
+        elif all(isinstance(v, (list, tuple)) for v in values):
+            lengths = {len(v) for v in values}
+            flat_ok = all(
+                isinstance(x, (int, float)) and not isinstance(x, bool)
+                for v in values
+                for x in v
+            )
+            if len(lengths) == 1 and flat_ok:
+                columns.extend(f"{key}[{i}]" for i in range(lengths.pop()))
     return sorted(columns)
+
+
+def _column_value(row: dict[str, Any], column: str) -> Any:
+    """Resolve a column against a row, honoring ``name[i]`` pseudo-columns."""
+    name, sep, index = column.partition("[")
+    if not sep:
+        return row.get(column)
+    try:
+        i = int(index.rstrip("]"))
+    except ValueError:
+        return None
+    values = row.get(name)
+    if not isinstance(values, (list, tuple)) or i < 0 or i >= len(values):
+        return None
+    return values[i]
 
 
 def _majority_baseline(
@@ -126,22 +161,27 @@ def _keyword_baseline(
         numeric = _numeric_columns(rows, label_column)
         medians = {}
         if numeric:
-            values = sorted(row[numeric[0]] for row in rows if row.get(numeric[0]) is not None)
+            values = sorted(
+                _column_value(row, numeric[0])
+                for row in rows
+                if _column_value(row, numeric[0]) is not None
+            )
             medians[numeric[0]] = median(values) if values else 0.0
 
-        def predict_one(row: dict[str, Any]) -> Any:  # noqa: F811
+        def predict_one(row: dict[str, Any]) -> Any:
             if not numeric:
                 return majority
             column = numeric[0]
-            value = row.get(column)
+            value = _column_value(row, column)
             if value is None:
                 return majority
             side_labels = [
                 lab
                 for r, lab in ((r, r.get(label_column)) for r in rows)
                 if lab is not None
-                and r.get(column) is not None
-                and (r[column] <= medians[column]) == (value <= medians[column])
+                and _column_value(r, column) is not None
+                and (_column_value(r, column) <= medians[column])
+                == (value <= medians[column])
             ]
             return _majority_label(side_labels)
 
@@ -173,22 +213,28 @@ def _deterministic_rule_baseline(
     best_rule: dict[str, Any] = {"fallback": "majority_class"}
 
     for column in _numeric_columns(rows, label_column):
-        values = sorted({row[column] for row in rows if row.get(column) is not None})
-        thresholds = [(a + b) / 2 for a, b in zip(values, values[1:], strict=False)]
+        values = sorted(
+            {
+                _column_value(row, column)
+                for row in rows
+                if _column_value(row, column) is not None
+            }
+        )
+        thresholds = [(a + b) / 2 for a, b in itertools.pairwise(values)]
         for threshold in thresholds:
             left = [
                 row.get(label_column)
                 for row in rows
-                if row.get(column) is not None
+                if _column_value(row, column) is not None
                 and row.get(label_column) is not None
-                and row[column] <= threshold
+                and _column_value(row, column) <= threshold
             ]
             right = [
                 row.get(label_column)
                 for row in rows
-                if row.get(column) is not None
+                if _column_value(row, column) is not None
                 and row.get(label_column) is not None
-                and row[column] > threshold
+                and _column_value(row, column) > threshold
             ]
             left_label = _majority_label(left)
             right_label = _majority_label(right)
@@ -210,9 +256,10 @@ def _deterministic_rule_baseline(
     threshold = rule.get("threshold")
 
     def predict_one(row: dict[str, Any]) -> Any:
-        if column is None or row.get(column) is None:
+        value = _column_value(row, column) if column is not None else None
+        if value is None:
             return majority
-        return rule["left_label"] if row[column] <= threshold else rule["right_label"]
+        return rule["left_label"] if value <= threshold else rule["right_label"]
 
     predictions, p50 = _timed_predict(predict_one, rows)
     return BaselineMetrics(
@@ -254,10 +301,10 @@ def run_baselines(
     scored = [b for b in baselines if b.accuracy is not None]
     if scored:
         # Highest accuracy wins; ties broken by latency, then cost, then name.
-        best = sorted(
+        best = min(
             scored,
             key=lambda b: (-b.accuracy, b.latency_ms_p50, b.cost_usd_per_1k, b.name),  # type: ignore[operator]
-        )[0]
+        )
         best_name = best.name
         bar = QualityBar(
             accuracy=best.accuracy,  # type: ignore[arg-type]
