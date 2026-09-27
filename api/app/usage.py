@@ -9,8 +9,15 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
-from shared.domain import ApiUser, UsageEvent, UsageKind, UsageScope, UsageSummary
-from shared.services.costing import summarize_usage
+from shared.domain import (
+    ApiUser,
+    UsageEvent,
+    UsageKind,
+    UsageRollups,
+    UsageScope,
+    UsageSummary,
+)
+from shared.services.costing import rollup_usage, summarize_usage
 
 from app.auth import get_current_user
 from app.projects import ProjectRepository
@@ -132,3 +139,17 @@ def usage_summary(
     _get_project_or_404(project_repository, project_id, user)
     events = usage_repository.list_events(project_id)
     return summarize_usage(project_id, events)
+
+
+@router.get("/projects/{project_id}/usage/rollups", response_model=UsageRollups)
+def usage_rollups(
+    project_id: UUID,
+    usage_repository: UsageRepository = Depends(get_usage_repository),
+    project_repository: ProjectRepository = Depends(get_project_repository),
+    user: ApiUser = Depends(get_current_user),
+) -> UsageRollups:
+    """Per-scope cost rollups: how much each training job / model /
+    deployment / evaluation / inference cost (Phase 3, §45)."""
+    _get_project_or_404(project_repository, project_id, user)
+    events = usage_repository.list_events(project_id)
+    return rollup_usage(project_id, events)
