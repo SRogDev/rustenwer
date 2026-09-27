@@ -9,8 +9,16 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import Settings, get_settings
+from app.datasets import router as datasets_router
+from app.demo import router as demo_router
+from app.deployments import router as deployments_router
+from app.evaluations import router as evaluations_router
 from app.logging_config import configure_logging, get_logger
+from app.models import router as models_router
 from app.projects import router as projects_router
+from app.specs import router as specs_router
+from app.training import router as training_router
+from app.usage import router as usage_router
 
 SERVICE_NAME = "rustenwer-api"
 SERVICE_VERSION = "0.1.0"
@@ -49,6 +57,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
 
     app.include_router(projects_router)
+    app.include_router(specs_router)
+    app.include_router(datasets_router)
+    app.include_router(training_router)
+    app.include_router(models_router)
+    app.include_router(evaluations_router)
+    app.include_router(deployments_router)
+    app.include_router(usage_router)
+    app.include_router(demo_router)
     return app
 
 
