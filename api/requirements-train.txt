@@ -1,0 +1,7 @@
+# Phase 2 training extras: real local CPU training (torch) + numpy.
+# Install with: pip install -r requirements-train.txt
+# The base API (requirements.txt) stays torch-free so the service boots
+# anywhere; adapters raise a clear error when torch is missing.
+--index-url https://download.pytorch.org/whl/cpu
+torch==2.14.0+cpu
+numpy==2.5.3

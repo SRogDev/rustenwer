@@ -20,3 +20,6 @@ out/
 .vscode/
 # Design-system scratch
 design-system/**/pages/*.tmp
+
+# Phase 2 — persistent training runtime state (queue DB, run attempts, artifacts)
+api/data/

@@ -59,6 +59,27 @@ Base URL: `http://localhost:8000` (env `API_URL`; web uses `NEXT_PUBLIC_API_URL`
 | GET | `/api/v1/projects/{id}/usage/summary` | bearer | `UsageSummary` (§45) |
 | POST | `/api/v1/projects/{id}/demo/termination` | bearer | seed §7 termination fixture (spec + dataset + version) and run baseline evaluation |
 
+### Phase 2 — Training infrastructure
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| POST | `/api/v1/training-jobs/{job_id}/enqueue` | bearer | `{provider?, hyperparameters?, resume_from_checkpoint_id?}` → `201 TrainingRun`; `409` on missing/invalid strategy, bad state, or `qlora` on the local provider |
+| GET | `/api/v1/training-jobs/{job_id}/runs/{run_id}` | bearer | run detail |
+| POST | `/api/v1/training-jobs/{job_id}/runs/{run_id}/cancel` | bearer | SIGTERM worker (graceful checkpoint) → `CANCELLED` |
+| POST | `/api/v1/training-jobs/{job_id}/runs/{run_id}/pause` | bearer | graceful stop → `PAUSED` |
+| POST | `/api/v1/training-jobs/{job_id}/runs/{run_id}/resume` | bearer | new worker from latest checkpoint → `RUNNING` |
+| POST | `/api/v1/training-jobs/{job_id}/runs/{run_id}/retry` | bearer | `{from_checkpoint?}` → new attempt → `201 TrainingRun` |
+| GET | `/api/v1/training-jobs/{job_id}/runs/{run_id}/logs` | bearer | `?tail=&follow=` → SSE stream (`text/event-stream`) or plain text (one `t line` per line) |
+| GET | `/api/v1/training-jobs/{job_id}/runs/{run_id}/metrics` | bearer | `RunMetrics` (loss/lr/grad_norm series) |
+| GET | `/api/v1/training-jobs/{job_id}/runs/{run_id}/checkpoints` | bearer | `CheckpointInfo[]` |
+| GET | `/api/v1/training-jobs/{job_id}/runs/{run_id}/artifacts` | bearer | `ArtifactRecord[]` |
+| GET | `/api/v1/training-jobs/{job_id}/runs/{run_id}/cost` | bearer | `RunCost` (wall-time × provider rate) |
+
+### Phase 2 contract amendments
+
+- `TrainingRun` gains `provider: string` (`'local'` default) and `error: string | null`.
+- New shapes: `CheckpointInfo`, `ArtifactRecord`, `MetricPoint`, `MetricSeries`, `RunMetrics`, `RunCost` (see `shared/types.ts` / `shared/domain.py`).
+
 Deterministic domain logic (diagnosis, dataset validation, baselines,
 strategy proposal, job transitions, usage summary) lives in
 `shared/services/` (pure Python, no FastAPI/LangGraph imports) so the API

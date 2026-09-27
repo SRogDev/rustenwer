@@ -331,11 +331,66 @@ class TrainingRun(BaseModel):
     job_id: UUID
     attempt: int = 1
     status: JobStatus = JobStatus.CREATED
+    provider: str = "local"  # 'local' | 'digitalocean' — the ComputeProvider that ran it.
     metrics: dict[str, Any] = Field(default_factory=dict)
     artifacts: dict[str, Any] = Field(default_factory=dict)
     logs: Optional[str] = None
+    error: Optional[str] = None
     started_at: Optional[str] = None
     finished_at: Optional[str] = None
+
+
+class CheckpointInfo(BaseModel):
+    """One atomic training checkpoint (Phase 2)."""
+
+    id: str  # e.g. 'ckpt-0003'
+    epoch: int
+    step: int
+    bytes: int
+    created_at: str
+
+
+class ArtifactRecord(BaseModel):
+    """One immutable, versioned artifact (plan §43)."""
+
+    name: str
+    version: int
+    sha256: str
+    bytes: int
+    created_at: str
+
+
+class MetricPoint(BaseModel):
+    """One point of a metric time series."""
+
+    step: int
+    value: float
+    ts: str
+
+
+class MetricSeries(BaseModel):
+    """A named metric time series (loss, lr, grad_norm, …)."""
+
+    name: str
+    points: list[MetricPoint] = Field(default_factory=list)
+
+
+class RunMetrics(BaseModel):
+    """All metric series of a run."""
+
+    run_id: UUID
+    series: list[MetricSeries] = Field(default_factory=list)
+    latest: dict[str, float] = Field(default_factory=dict)
+
+
+class RunCost(BaseModel):
+    """Wall-time cost accounting for one run (plan §45)."""
+
+    run_id: UUID
+    provider: str
+    seconds: float
+    usd: float
+    rate_usd_per_hour: float
 
 
 class Model(BaseModel):

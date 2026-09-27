@@ -30,8 +30,22 @@ logger = get_logger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("api.startup", service=SERVICE_NAME, version=SERVICE_VERSION)
+    # Phase 2: start the training worker loop (queue -> ComputeProvider).
+    # Runs only in the real server process; tests build their own managers
+    # (or none at all) and TestClient does not enter lifespan by default.
+    manager = None
+    try:
+        from app.training.worker import get_worker_manager
+
+        manager = get_worker_manager()
+        manager.start()
+        logger.info("training-worker.started")
+    except Exception as exc:  # noqa: BLE001 — a sick worker must not kill boot
+        logger.warning("training-worker.start_failed", error=str(exc))
     yield
-    logger.info("api.shutdown", service=SERVICE_NAME)
+    if manager is not None:
+        manager.stop()
+        logger.info("api.shutdown", service=SERVICE_NAME)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:

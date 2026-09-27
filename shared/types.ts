@@ -272,11 +272,62 @@ export interface TrainingRun {
   job_id: string;
   attempt: number;
   status: JobStatus;
+  /** 'local' | 'digitalocean' — the ComputeProvider that ran it. */
+  provider: string;
   metrics: Record<string, unknown>;
   artifacts: Record<string, unknown>;
   logs: string | null;
+  error: string | null;
   started_at: string | null;
   finished_at: string | null;
+}
+
+/** One atomic training checkpoint (Phase 2). */
+export interface CheckpointInfo {
+  /** e.g. 'ckpt-0003' */
+  id: string;
+  epoch: number;
+  step: number;
+  bytes: number;
+  created_at: string;
+}
+
+/** One immutable, versioned artifact (plan §43). */
+export interface ArtifactRecord {
+  name: string;
+  version: number;
+  sha256: string;
+  bytes: number;
+  created_at: string;
+}
+
+/** One point of a metric time series. */
+export interface MetricPoint {
+  step: number;
+  value: number;
+  ts: string;
+}
+
+/** A named metric time series (loss, lr, grad_norm, …). */
+export interface MetricSeries {
+  name: string;
+  points: MetricPoint[];
+}
+
+/** All metric series of a run. */
+export interface RunMetrics {
+  run_id: string;
+  series: MetricSeries[];
+  latest: Record<string, number>;
+}
+
+/** Wall-time cost accounting for one run (plan §45). */
+export interface RunCost {
+  run_id: string;
+  provider: string;
+  seconds: number;
+  usd: number;
+  rate_usd_per_hour: number;
 }
 
 /** Model — a learned computational model (plan §2.1). */
