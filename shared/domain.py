@@ -535,6 +535,93 @@ class ComparisonReport(BaseModel):
     notes: list[str] = Field(default_factory=list)
 
 
+class ArchitectureComponentKind(StrEnum):
+    """Kinds of components an IntelligenceArchitecture can compose (plan §2.2,
+    §31). A component is either learned (model_version), cheap/deterministic
+    (baseline, deterministic_rule, threshold), behavioral (prompt) or
+    structural (post_processor, router)."""
+
+    MODEL_VERSION = "model_version"
+    BASELINE = "baseline"
+    DETERMINISTIC_RULE = "deterministic_rule"
+    THRESHOLD = "threshold"
+    PROMPT = "prompt"
+    POST_PROCESSOR = "post_processor"
+    ROUTER = "router"
+
+
+# Recognized architecture shapes (IntelligenceArchitecture.kind). The list is
+# open-ended — "custom" covers anything the discovery engine invents later.
+ARCHITECTURE_KINDS: tuple[str, ...] = (
+    "single_model",
+    "deterministic_rule",
+    "classifier_with_deterministic_rule",
+    "embedding_knn_threshold",
+    "llm_judge_threshold",
+    "heuristic_pipeline",
+    "model_ensemble",
+    "custom",
+)
+
+
+class ArchitectureComponent(BaseModel):
+    """One node of an intelligence architecture.
+
+    kind=model_version → ref is a model version UUID (immutable).
+    kind=baseline → ref is a baseline name (majority_class |
+    keyword_heuristic | deterministic_rule).
+    kind=deterministic_rule → config carries the fitted rule, e.g.
+      {"column": "progress_score", "threshold": 0.21,
+       "left_label": "stop", "right_label": "continue",
+       "fallback_label": "continue"}.
+    kind=threshold → config {"input_key": ..., "threshold": ...,
+      "above": ..., "below": ...}.
+    kind=prompt → config {"template": ..., "template_sha256": ...}.
+    """
+
+    kind: ArchitectureComponentKind
+    ref: str | None = None
+    label: str = ""
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class IntelligenceArchitecture(BaseModel):
+    """How an intelligence's components compose into an executable system
+    (plan §2.2, §31). Stored as an immutable snapshot inside each
+    IntelligenceVersion — named drafts live in intelligence_architectures."""
+
+    kind: str = "single_model"
+    components: list[ArchitectureComponent] = Field(default_factory=list)
+    execution_order: list[int] = Field(default_factory=list)
+    notes: str | None = None
+
+    def ordered_components(self) -> list[ArchitectureComponent]:
+        """Components in execution order (defaults to declaration order)."""
+        if not self.execution_order:
+            return list(self.components)
+        return [self.components[i] for i in self.execution_order]
+
+
+# Programming constructs as intelligence primitives (plan §3). A conceptual
+# map: traditional program parts that learned intelligence can replace.
+# "try/catch" maps to verification; a dedicated recovery primitive is an
+# emerging category, not one of the 20 catalogued primitives (§2.3).
+PRIMITIVE_PROGRAMMING_MAP: dict[str, str] = {
+    "if": IntelligencePrimitive.DECISION.value,
+    "switch": IntelligencePrimitive.ROUTING.value,
+    "filter": IntelligencePrimitive.FILTERING.value,
+    "sort": IntelligencePrimitive.RANKING.value,
+    "search": IntelligencePrimitive.SEARCH.value,
+    "while": IntelligencePrimitive.ITERATION_CONTROL.value,
+    "assert": IntelligencePrimitive.VERIFICATION.value,
+    "try/catch": IntelligencePrimitive.VERIFICATION.value,
+    "compress": IntelligencePrimitive.COMPRESSION.value,
+    "optimize": IntelligencePrimitive.OPTIMIZATION.value,
+    "predict": IntelligencePrimitive.PREDICTION.value,
+    "debug": IntelligencePrimitive.DIAGNOSIS.value,
+}
+
+
 class Intelligence(BaseModel):
     """Intelligence — an executable system performing a cognitive function
     (plan §2.2, §31). SEPARATE from Model: one model may power multiple
@@ -550,7 +637,13 @@ class Intelligence(BaseModel):
 
 class IntelligenceVersion(BaseModel):
     """IntelligenceVersion — immutable version referencing immutable
-    component versions (§31, §43)."""
+    component versions (§31, §43).
+
+    Phase 4 deepens the version into the full intelligence abstraction: the
+    architecture snapshot, the pinned input/output schemas (the §7 contract)
+    and the locked flag are all part of the immutable record. There is no
+    update path — publishing a change means publishing a new version.
+    """
 
     id: UUID
     intelligence_id: UUID
@@ -558,10 +651,95 @@ class IntelligenceVersion(BaseModel):
     components: dict[str, Any] = Field(
         default_factory=dict
     )  # {model_version_ids: [...], baseline_refs: [...], harness: {...}}
+    architecture: IntelligenceArchitecture | None = None
+    input_schema: dict[str, Any] = Field(default_factory=dict)
+    output_schema: dict[str, Any] = Field(default_factory=dict)
     notes: str | None = None
     best_evaluation_run_id: UUID | None = None
     status: str = "DRAFT"  # DRAFT | PROMOTED (promotion logic lands in Phase 6)
+    locked: bool = True  # set at publish; versions are never mutated
     created_at: str
+
+
+class IntelligenceVersionDiff(BaseModel):
+    """What changed between two intelligence versions (plan §32, §37).
+
+    Mirrors the model lineage diff: component-level changes (added, removed,
+    modified incl. threshold/prompt changes), architecture-kind changes and
+    schema changes — the evidence a human reviewer needs to approve v2.
+    """
+
+    intelligence_id: UUID
+    from_version: int
+    to_version: int
+    changed_fields: list[str] = Field(default_factory=list)
+    components_added: list[dict[str, Any]] = Field(default_factory=list)
+    components_removed: list[dict[str, Any]] = Field(default_factory=list)
+    components_modified: list[dict[str, Any]] = Field(default_factory=list)
+    architecture_kind_changed: bool = False
+    schema_changed: bool = False
+    notes: list[str] = Field(default_factory=list)
+
+
+class InferenceProvider(StrEnum):
+    """Unified inference abstraction (plan §34). The Intelligence Registry
+    never depends on one provider; only RUSTENWER_HOSTED executes in
+    Phase 4 — the others are honest capability entries."""
+
+    RUSTENWER_HOSTED = "rustenwer_hosted"
+    EXTERNAL_API = "external_api"
+    LOCAL_GPU = "local_gpu"
+
+
+class ProviderInfo(BaseModel):
+    """Capability entry for one inference provider."""
+
+    name: InferenceProvider
+    functional: bool
+    capabilities: list[str] = Field(default_factory=list)
+    note: str = ""
+
+
+class InferenceRequest(BaseModel):
+    """Inputs for one intelligence invocation — validated against the
+    intelligence version's input_schema before any component runs."""
+
+    inputs: dict[str, Any] = Field(default_factory=dict)
+
+
+class InferenceResponse(BaseModel):
+    """Machine-readable intelligence output (plan §33)."""
+
+    output: dict[str, Any]
+    intelligence_id: UUID
+    intelligence_version_id: UUID
+    deployment_id: UUID
+    primitive: IntelligencePrimitive | None = None
+    latency_ms: float = 0.0
+    provider: InferenceProvider = InferenceProvider.RUSTENWER_HOSTED
+
+
+# Machine-readable output shapes per primitive (plan §33). The inference
+# pipeline shapes every response to these keys so callers never parse
+# free text.
+OUTPUT_SHAPES: dict[str, list[str]] = {
+    IntelligencePrimitive.DECISION.value: ["decision", "confidence"],
+    IntelligencePrimitive.TERMINATION.value: ["decision", "confidence"],
+    IntelligencePrimitive.CLASSIFICATION.value: ["label", "probabilities"],
+    IntelligencePrimitive.RANKING.value: ["score"],
+    IntelligencePrimitive.FILTERING.value: ["kept", "scores"],
+    IntelligencePrimitive.PREDICTION.value: ["prediction", "confidence"],
+    IntelligencePrimitive.VERIFICATION.value: ["verdict", "confidence"],
+    IntelligencePrimitive.ROUTING.value: ["route", "confidence"],
+}
+
+
+def output_shape_for_primitive(
+    primitive: IntelligencePrimitive | str | None,
+) -> list[str]:
+    """Expected output keys for a primitive; generic ["output"] fallback."""
+    key = primitive.value if isinstance(primitive, IntelligencePrimitive) else primitive
+    return OUTPUT_SHAPES.get(key or "", ["output"])
 
 
 class EvaluationResults(BaseModel):
@@ -589,12 +767,20 @@ class Evaluation(BaseModel):
 
 
 class Deployment(BaseModel):
-    """Deployment — an approved Intelligence/Model served as an API endpoint."""
+    """Deployment — an approved Intelligence served as an API endpoint.
+
+    Phase 4: a deployment references an immutable intelligence_version_id
+    (§31, §43). model_version_id remains as a back-compat path: creating a
+    deployment with only a model_version_id auto-creates a single-model
+    intelligence wrapping it.
+    """
 
     id: UUID
     project_id: UUID
     spec_id: UUID
     model_version_id: UUID | None = None
+    intelligence_version_id: UUID | None = None
+    provider: InferenceProvider = InferenceProvider.RUSTENWER_HOSTED
     name: str
     status: DeploymentStatus = DeploymentStatus.DRAFT
     endpoint_url: str | None = None

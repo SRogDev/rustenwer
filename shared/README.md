@@ -109,6 +109,27 @@ Registry:
 | GET | `/api/v1/intelligences/{intelligence_id}/versions/{version}` | bearer | one version + resolved component lineage |
 | POST | `/api/v1/intelligences/{intelligence_id}/promote` | bearer | `501` — promotion logic lands in Phase 6 |
 
+### Phase 4 — Intelligence Abstraction
+
+New shapes: `ArchitectureComponentKind`, `ArchitectureComponent`,
+`IntelligenceArchitecture` (+ `ARCHITECTURE_KINDS`, `PRIMITIVE_PROGRAMMING_MAP`
+— the §3 programming-construct → primitive map), `IntelligenceVersionDiff`,
+`InferenceProvider` (+ `ProviderInfo`), `InferenceRequest`,
+`InferenceResponse`, `OUTPUT_SHAPES` / `output_shape_for_primitive`
+(see `shared/types.ts` / `shared/domain.py`).
+
+Contract amendments:
+
+- `IntelligenceVersion` gains `architecture: IntelligenceArchitecture | null`,
+  `input_schema`, `output_schema` (pinned, immutable) and `locked: true`.
+- `Deployment` gains `intelligence_version_id: string | null` (the Phase 4
+  path) and `provider: InferenceProvider`; `model_version_id` stays as the
+  back-compat path (auto-creates a single-model intelligence).
+- New endpoints: `GET /api/v1/intelligences/{id}/versions/{a}/diff/{b}`,
+  `GET /api/v1/inference/providers`, `POST /api/v1/deployments/{id}/infer`
+  (`{inputs}` → machine-readable output per primitive, §33),
+  `GET /api/v1/deployments/{id}`.
+
 Cost:
 
 | Method | Path | Auth | Description |

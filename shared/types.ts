@@ -449,10 +449,88 @@ export interface IntelligenceVersion {
   intelligence_id: string;
   version: number;
   components: Record<string, unknown>;
+  architecture: IntelligenceArchitecture | null;
+  input_schema: Record<string, unknown>;
+  output_schema: Record<string, unknown>;
   notes: string | null;
   best_evaluation_run_id: string | null;
   status: string;
+  locked: boolean;
   created_at: string;
+}
+
+/** Component kinds an IntelligenceArchitecture can compose (plan §2.2, §31). */
+export type ArchitectureComponentKind =
+  | 'model_version'
+  | 'baseline'
+  | 'deterministic_rule'
+  | 'threshold'
+  | 'prompt'
+  | 'post_processor'
+  | 'router';
+
+export interface ArchitectureComponent {
+  kind: ArchitectureComponentKind;
+  ref: string | null;
+  label: string;
+  config: Record<string, unknown>;
+}
+
+/** How an intelligence's components compose into an executable system. */
+export interface IntelligenceArchitecture {
+  kind: string;
+  components: ArchitectureComponent[];
+  execution_order: number[];
+  notes: string | null;
+}
+
+export const ARCHITECTURE_KINDS: readonly string[] = [
+  'single_model',
+  'deterministic_rule',
+  'classifier_with_deterministic_rule',
+  'embedding_knn_threshold',
+  'llm_judge_threshold',
+  'heuristic_pipeline',
+  'model_ensemble',
+  'custom',
+] as const;
+
+/** What changed between two intelligence versions (plan §32, §37). */
+export interface IntelligenceVersionDiff {
+  intelligence_id: string;
+  from_version: number;
+  to_version: number;
+  changed_fields: string[];
+  components_added: Record<string, unknown>[];
+  components_removed: Record<string, unknown>[];
+  components_modified: Record<string, unknown>[];
+  architecture_kind_changed: boolean;
+  schema_changed: boolean;
+  notes: string[];
+}
+
+/** Unified inference abstraction (plan §34). */
+export type InferenceProvider = 'rustenwer_hosted' | 'external_api' | 'local_gpu';
+
+export interface ProviderInfo {
+  name: InferenceProvider;
+  functional: boolean;
+  capabilities: string[];
+  note: string;
+}
+
+export interface InferenceRequest {
+  inputs: Record<string, unknown>;
+}
+
+export interface InferenceResponse {
+  output: Record<string, unknown>;
+  intelligence_id: string;
+  intelligence_version_id: string;
+  deployment_id: string;
+  primitive: IntelligencePrimitive | null;
+  latency_ms: number;
+  provider: InferenceProvider;
 }
 
 /** Evaluation — task-specific measurement of a candidate or baseline (§15).
@@ -476,12 +554,16 @@ export interface EvaluationResults {
   evaluated_at: string;
 }
 
-/** Deployment — an approved Intelligence/Model served as an API endpoint. */
+/** Deployment — an approved Intelligence served as an API endpoint.
+ *  Phase 4: references an immutable intelligence_version_id; model_version_id
+ *  remains as the back-compat path (auto-creates a single-model intelligence). */
 export interface Deployment {
   id: string;
   project_id: string;
   spec_id: string;
   model_version_id: string | null;
+  intelligence_version_id: string | null;
+  provider: InferenceProvider;
   name: string;
   status: DeploymentStatus;
   endpoint_url: string | null;
