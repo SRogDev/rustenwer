@@ -1,0 +1,10 @@
+# Next.js build output
+.next/
+out/
+# Dependencies
+node_modules/
+# Local env (never commit); .env.example is the template
+.env
+.env.local
+# Debug logs
+npm-debug.log*

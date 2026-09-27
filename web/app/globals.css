@@ -1,0 +1,57 @@
+@import "tailwindcss";
+
+/*
+ * Rustenwer design tokens.
+ * Brand override (owner decision): platinum #E5E4E2 is the primary brand
+ * color; dark charcoal #16161A is the primary foreground (contrast ≥ 4.5:1).
+ * The design-system suggestion of purple #7C3AED is NOT used as primary.
+ */
+@theme {
+  --color-platinum: #e5e4e2;
+  --color-platinum-deep: #d6d4d1;
+  --color-charcoal: #16161a;
+  --color-charcoal-soft: #1f1f24;
+  --color-ink: #2a2a30;
+  --color-muted-ink: #4b4b52;
+  --color-paper: #fafafa;
+  --color-card: #ffffff;
+  --color-line: #d9d7d3;
+  --color-ring: #16161a;
+
+  --font-display: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-body: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: var(--color-paper);
+  color: var(--color-charcoal);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Visible focus for keyboard navigation (a11y priority 1). */
+:focus-visible {
+  outline: 3px solid var(--color-charcoal);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  /* The standard reduced-motion reset needs !important to reliably
+     override any animation/transition declaration. */
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

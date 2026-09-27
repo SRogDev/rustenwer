@@ -1,0 +1,22 @@
+# Rustenwer root ignores
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+# Node
+node_modules/
+.next/
+out/
+# Env / secrets — never commit
+.env
+.env.local
+*.pem
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+# Design-system scratch
+design-system/**/pages/*.tmp
