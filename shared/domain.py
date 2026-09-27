@@ -81,6 +81,53 @@ class IntelligenceSpecStatus(StrEnum):
     ARCHIVED = "ARCHIVED"
 
 
+class EvaluationStatus(StrEnum):
+    """Evaluation lifecycle status."""
+
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
+class DeploymentStatus(StrEnum):
+    """Deployment lifecycle status."""
+
+    DRAFT = "DRAFT"
+    ACTIVE = "ACTIVE"
+    PAUSED = "PAUSED"
+    ARCHIVED = "ARCHIVED"
+
+
+class DatasetFormat(StrEnum):
+    """Dataset storage format."""
+
+    JSONL = "jsonl"
+    CSV = "csv"
+    INLINE = "inline"
+
+
+class UsageScope(StrEnum):
+    """Usage accounting scope (§45)."""
+
+    PROJECT = "project"
+    EXPERIMENT = "experiment"
+    CANDIDATE = "candidate"
+    TRAINING_JOB = "training_job"
+    MODEL = "model"
+    DEPLOYMENT = "deployment"
+    INFERENCE = "inference"
+
+
+class UsageKind(StrEnum):
+    """Usage accounting kind (§45)."""
+
+    TRAINING = "training"
+    INFERENCE = "inference"
+    EVALUATION = "evaluation"
+    STORAGE = "storage"
+
+
 class UserRole(StrEnum):
     OWNER = "owner"
     ADMIN = "admin"
@@ -138,3 +185,240 @@ class IntelligenceSpec(BaseModel):
     human_review_policy: Optional[str] = None
     status: IntelligenceSpecStatus = IntelligenceSpecStatus.DRAFT
     version: int = 1
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 — MVP core entities (plan §41, §61 Phase 1)
+# ---------------------------------------------------------------------------
+
+
+class Dataset(BaseModel):
+    """Dataset — a named collection of labeled examples owned by a project."""
+
+    id: UUID
+    project_id: UUID
+    name: str
+    description: Optional[str] = None
+    format: DatasetFormat = DatasetFormat.INLINE
+    row_count: int = 0
+    created_at: str
+    updated_at: str
+
+
+class DatasetReport(BaseModel):
+    """Deterministic dataset validation report (Dataset Agent, §14)."""
+
+    dataset_id: UUID
+    version: int
+    row_count: int
+    column_schema: dict[str, str] = Field(default_factory=dict)
+    class_balance: Optional[dict[str, int]] = None
+    missing_values: dict[str, int] = Field(default_factory=dict)
+    leakage_flags: list[str] = Field(default_factory=list)
+    imbalance_detected: bool = False
+    recommended_split: dict[str, float] = Field(
+        default_factory=lambda: {"train": 0.7, "validation": 0.15, "test": 0.15}
+    )
+    ready_for_training: bool = False
+    notes: list[str] = Field(default_factory=list)
+
+
+class DatasetVersion(BaseModel):
+    """DatasetVersion — immutable snapshot of dataset rows + computed stats."""
+
+    id: UUID
+    dataset_id: UUID
+    version: int
+    column_schema: dict[str, str] = Field(default_factory=dict)
+    split_config: dict[str, float] = Field(
+        default_factory=lambda: {"train": 0.7, "validation": 0.15, "test": 0.15}
+    )
+    stats: DatasetReport
+    created_at: str
+
+
+class DiagnosisResult(BaseModel):
+    """Result of the Specification/Diagnostic Agent (§8)."""
+
+    spec_id: UUID
+    ml_necessary: bool  # Rule 13: the platform may conclude no ML is required.
+    primitive: IntelligencePrimitive
+    rationale: str  # Condensed answers to the 10 diagnostic questions (§8).
+    candidate_approaches: list[str] = Field(default_factory=list)
+    data_requirements: list[str] = Field(default_factory=list)
+    success_metrics: list[str] = Field(default_factory=list)
+    key_constraints: list[str] = Field(default_factory=list)
+    diagnosed_at: str
+
+
+class BaselineMetrics(BaseModel):
+    """One cheap baseline measurement (Baseline-first principle, §16)."""
+
+    name: str  # 'majority_class' | 'keyword_heuristic' | 'deterministic_rule'
+    description: str
+    accuracy: Optional[float] = None
+    latency_ms_p50: float = 0.0
+    cost_usd_per_1k: float = 0.0
+    size_bytes: int = 0
+    predictions_evaluated: int = 0
+
+
+class QualityBar(BaseModel):
+    """Bar every trained candidate must beat (Rule 9)."""
+
+    accuracy: float
+    latency_ms_p50: float
+    cost_usd_per_1k: float
+
+
+class BaselineReport(BaseModel):
+    """Baseline comparison report produced before any training is proposed."""
+
+    spec_id: UUID
+    dataset_version_id: UUID
+    baselines: list[BaselineMetrics] = Field(default_factory=list)
+    best_baseline: str = ""
+    bar_to_beat: QualityBar
+    evaluated_at: str
+
+
+class TrainingStrategy(BaseModel):
+    """Training strategy decided by the Training Strategy Agent (§12).
+
+    The agent DECIDES; the executor (Phase 2) executes (Rule 3).
+    """
+
+    model_family: Optional[str] = None  # Null when the strategy is "no training".
+    architecture: Optional[str] = None
+    # e.g. 'none-deterministic' | 'lora' | 'qlora' | 'distillation' | 'embedding-ft'
+    training_method: Optional[str] = None
+    objective: str = ""
+    dataset_ref: Optional[dict[str, Any]] = None  # {dataset_id, version}
+    hyperparameters: dict[str, Any] = Field(default_factory=dict)
+    evaluation_plan: str = ""
+    compute_budget: dict[str, Optional[float]] = Field(
+        default_factory=lambda: {"max_gpu_hours": None, "max_cost_usd": None}
+    )
+    baseline_bar: Optional[QualityBar] = None
+    rationale: str = ""
+    no_training_justification: Optional[str] = None  # Set when ml_necessary is False.
+
+
+class TrainingJob(BaseModel):
+    """Training Job — expensive operation with an explicit lifecycle (§42).
+
+    Real GPU execution lands in Phase 2; Phase 1 records strategy + state.
+    """
+
+    id: UUID
+    project_id: UUID
+    spec_id: Optional[UUID] = None
+    dataset_version_id: Optional[UUID] = None
+    name: str
+    status: JobStatus = JobStatus.CREATED
+    strategy: Optional[TrainingStrategy] = None
+    compute_budget: Optional[dict[str, Optional[float]]] = None
+    error: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+class TrainingRun(BaseModel):
+    """Training Run — one execution attempt of a job."""
+
+    id: UUID
+    job_id: UUID
+    attempt: int = 1
+    status: JobStatus = JobStatus.CREATED
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    artifacts: dict[str, Any] = Field(default_factory=dict)
+    logs: Optional[str] = None
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+
+
+class Model(BaseModel):
+    """Model — a learned computational model (plan §2.1)."""
+
+    id: UUID
+    project_id: UUID
+    name: str
+    description: Optional[str] = None
+    created_at: str
+
+
+class ModelVersion(BaseModel):
+    """ModelVersion — immutable version of a model (§43)."""
+
+    id: UUID
+    model_id: UUID
+    version: int = 1
+    training_run_id: Optional[UUID] = None
+    architecture: Optional[dict[str, Any]] = None
+    size_bytes: Optional[int] = None
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    artifact_uri: Optional[str] = None
+    created_at: str
+
+
+class EvaluationResults(BaseModel):
+    baselines: list[BaselineMetrics] = Field(default_factory=list)
+    bar_to_beat: QualityBar
+    recommendation: str = ""
+    evaluated_at: str
+
+
+class Evaluation(BaseModel):
+    """Evaluation — task-specific measurement (§15).
+
+    The evaluator is independent of the training mechanism (Rule 11).
+    """
+
+    id: UUID
+    project_id: UUID
+    spec_id: UUID
+    dataset_version_id: UUID
+    name: str
+    status: EvaluationStatus = EvaluationStatus.PENDING
+    results: Optional[EvaluationResults] = None
+    created_at: str
+    completed_at: Optional[str] = None
+
+
+class Deployment(BaseModel):
+    """Deployment — an approved Intelligence/Model served as an API endpoint."""
+
+    id: UUID
+    project_id: UUID
+    spec_id: UUID
+    model_version_id: Optional[UUID] = None
+    name: str
+    status: DeploymentStatus = DeploymentStatus.DRAFT
+    endpoint_url: Optional[str] = None
+    config: dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+    updated_at: str
+
+
+class UsageEvent(BaseModel):
+    """UsageEvent — one cost/usage record (§45)."""
+
+    id: UUID
+    project_id: UUID
+    scope: UsageScope
+    scope_id: UUID
+    kind: UsageKind
+    quantity: float = 0.0
+    unit: str = ""
+    cost_usd: float = 0.0
+    recorded_at: str
+
+
+class UsageSummary(BaseModel):
+    """Aggregated cost view for a project (§45)."""
+
+    project_id: UUID
+    total_cost_usd: float = 0.0
+    by_scope: dict[str, float] = Field(default_factory=dict)
+    by_kind: dict[str, float] = Field(default_factory=dict)
+    event_count: int = 0
