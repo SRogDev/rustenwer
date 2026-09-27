@@ -157,8 +157,8 @@ def _usage_recorder(usage_repository: UsageRepository):  # type: ignore[no-untyp
             UsageEvent(
                 id=uuid4(),
                 project_id=run.project_id,
-                scope=UsageScope.PROJECT,
-                scope_id=run.project_id,
+                scope=UsageScope.EVALUATION,
+                scope_id=run.id,
                 kind=UsageKind.EVALUATION,
                 quantity=float(run.metrics.get("predictions_evaluated", 0) or 0),
                 unit="predictions",

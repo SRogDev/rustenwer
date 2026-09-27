@@ -35,6 +35,7 @@ from shared.domain import (
     SubjectKind,
 )
 from shared.services.baselines import (
+    _column_value,
     _labels,
     _majority_label,
     _numeric_columns,
@@ -167,7 +168,9 @@ def _baseline_predictors(
             medians: dict[str, float] = {}
             if numeric:
                 values = sorted(
-                    row[numeric[0]] for row in rows if row.get(numeric[0]) is not None
+                    _column_value(row, numeric[0])
+                    for row in rows
+                    if _column_value(row, numeric[0]) is not None
                 )
                 medians[numeric[0]] = float(median(values)) if values else 0.0
 
@@ -175,15 +178,16 @@ def _baseline_predictors(
                 if not numeric:
                     return majority
                 column = numeric[0]
-                value = row.get(column)
+                value = _column_value(row, column)
                 if value is None:
                     return majority
                 side_labels = [
                     lab
                     for r, lab in ((r, r.get(label_column)) for r in rows)
                     if lab is not None
-                    and r.get(column) is not None
-                    and (r[column] <= medians[column]) == (value <= medians[column])
+                    and _column_value(r, column) is not None
+                    and (_column_value(r, column) <= medians[column])
+                    == (value <= medians[column])
                 ]
                 return _majority_label(side_labels)
 
@@ -191,22 +195,28 @@ def _baseline_predictors(
         best_accuracy = -1.0
         best_rule: dict[str, Any] = {"fallback": "majority_class"}
         for column in _numeric_columns(rows, label_column):
-            values = sorted({row[column] for row in rows if row.get(column) is not None})
+            values = sorted(
+                {
+                    _column_value(row, column)
+                    for row in rows
+                    if _column_value(row, column) is not None
+                }
+            )
             thresholds = [(a + b) / 2 for a, b in zip(values, values[1:], strict=False)]
             for threshold in thresholds:
                 left = [
                     row.get(label_column)
                     for row in rows
-                    if row.get(column) is not None
+                    if _column_value(row, column) is not None
                     and row.get(label_column) is not None
-                    and row[column] <= threshold
+                    and _column_value(row, column) <= threshold
                 ]
                 right = [
                     row.get(label_column)
                     for row in rows
-                    if row.get(column) is not None
+                    if _column_value(row, column) is not None
                     and row.get(label_column) is not None
-                    and row[column] > threshold
+                    and _column_value(row, column) > threshold
                 ]
                 left_label = _majority_label(left)
                 right_label = _majority_label(right)
@@ -227,9 +237,10 @@ def _baseline_predictors(
         threshold = rule.get("threshold")
 
         def predict(row: dict[str, Any]) -> Any:  # noqa: F811
-            if column is None or row.get(column) is None:
+            value = _column_value(row, column) if column is not None else None
+            if value is None:
                 return majority
-            return rule["left_label"] if row[column] <= threshold else rule["right_label"]
+            return rule["left_label"] if value <= threshold else rule["right_label"]
 
     else:
         raise UnknownBaselineError(f"unknown baseline {baseline_name!r}")

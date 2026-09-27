@@ -172,9 +172,14 @@ def _synthetic_blobs(n_train: int, n_val: int, n_features: int, seed: int) -> di
 
 
 def _prepare_blobs(ctx: AdapterContext, n_features: int = 20) -> dict[str, Any]:
-    """Shared prepare(): seeded blobs -> workdir/dataset.pt (idempotent)."""
+    """Shared prepare(): seeded blobs -> workdir/dataset.pt (idempotent).
+
+    `n_features` may also come from hyperparameters (Phase 3: a 2-feature
+    classifier trains exactly the ring task the ring-benchmark evaluates).
+    """
     torch = _torch()
     hp = ctx.hyperparameters
+    n_features = int(hp.get("n_features", n_features))
     n_train = int(hp.get("n_train", 2000))
     n_val = int(hp.get("n_val", 400))
     path = ctx.workdir / "dataset.pt"
