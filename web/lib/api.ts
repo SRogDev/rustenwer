@@ -10,6 +10,8 @@
  * Phase 0 can be demoed before the backend is running.
  */
 import type {
+  ArtifactRecord,
+  CheckpointInfo,
   Dataset,
   DatasetReport,
   DatasetVersion,
@@ -20,10 +22,13 @@ import type {
   IntelligencePrimitive,
   IntelligenceSpec,
   JobStatus,
+  MetricSeries,
   Model,
   ModelVersion,
   Project,
   ProjectStatus,
+  RunCost,
+  RunMetrics,
   TrainingJob,
   TrainingRun,
   TrainingStrategy,
@@ -36,8 +41,13 @@ import type {
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
-/** Phase 0 stub auth: any well-formed Bearer token is accepted by the API. */
-const DEV_TOKEN = "phase0-dev-token";
+/**
+ * Phase 0 stub auth: any well-formed Bearer token is accepted by the API.
+ * Exported so raw-fetch clients (the SSE log viewer, which cannot use
+ * request() — EventSource/fetch streaming has no place for its timeout)
+ * can attach the same Authorization header.
+ */
+export const DEV_TOKEN = "phase0-dev-token";
 
 export class ApiOfflineError extends Error {
   constructor(message = "API unreachable") {
@@ -383,6 +393,130 @@ export async function listTrainingRuns(jobId: string): Promise<TrainingRun[]> {
   return request<TrainingRun[]>(
     `/api/v1/training-jobs/${encodeURIComponent(jobId)}/runs`,
   );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2 — training run execution clients (plan §12 executor).
+// Contract: the backend implements these endpoints in parallel; the shapes
+// below are FINAL per the phase-2 contract (see shared/types.ts).
+// All paths are bearer-authenticated and org-scoped.
+// ---------------------------------------------------------------------------
+
+/** Compute provider accepted by POST …/enqueue. */
+export type TrainingProvider = "local" | "digitalocean";
+
+/** Payload for POST /api/v1/training-jobs/{jobId}/enqueue. */
+export interface EnqueueRunInput {
+  provider?: TrainingProvider;
+  hyperparameters?: Record<string, unknown>;
+  resume_from_checkpoint_id?: string | null;
+}
+
+/**
+ * Enqueues a new execution attempt of a job → 201 TrainingRun.
+ * 409 on missing/invalid strategy, illegal job state, or qlora on the
+ * local provider (the `detail` is surfaced inline by the UI).
+ */
+export async function enqueueTrainingJob(
+  jobId: string,
+  input: EnqueueRunInput,
+): Promise<TrainingRun> {
+  return request<TrainingRun>(
+    `/api/v1/training-jobs/${encodeURIComponent(jobId)}/enqueue`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export async function getTrainingRun(
+  jobId: string,
+  runId: string,
+): Promise<TrainingRun> {
+  return request<TrainingRun>(
+    `/api/v1/training-jobs/${encodeURIComponent(jobId)}/runs/${encodeURIComponent(runId)}`,
+  );
+}
+
+function runActionPath(jobId: string, runId: string, action: string): string {
+  return `/api/v1/training-jobs/${encodeURIComponent(jobId)}/runs/${encodeURIComponent(runId)}/${action}`;
+}
+
+export async function pauseRun(
+  jobId: string,
+  runId: string,
+): Promise<TrainingRun> {
+  return request<TrainingRun>(runActionPath(jobId, runId, "pause"), {
+    method: "POST",
+  });
+}
+
+export async function resumeRun(
+  jobId: string,
+  runId: string,
+): Promise<TrainingRun> {
+  return request<TrainingRun>(runActionPath(jobId, runId, "resume"), {
+    method: "POST",
+  });
+}
+
+export async function cancelRun(
+  jobId: string,
+  runId: string,
+): Promise<TrainingRun> {
+  return request<TrainingRun>(runActionPath(jobId, runId, "cancel"), {
+    method: "POST",
+  });
+}
+
+/** Starts a new attempt; from_checkpoint resumes from the latest checkpoint. */
+export async function retryRun(
+  jobId: string,
+  runId: string,
+  input: { from_checkpoint?: boolean } = {},
+): Promise<TrainingRun> {
+  return request<TrainingRun>(runActionPath(jobId, runId, "retry"), {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function getRunMetrics(
+  jobId: string,
+  runId: string,
+): Promise<RunMetrics> {
+  return request<RunMetrics>(runActionPath(jobId, runId, "metrics"));
+}
+
+export async function getRunCheckpoints(
+  jobId: string,
+  runId: string,
+): Promise<CheckpointInfo[]> {
+  return request<CheckpointInfo[]>(runActionPath(jobId, runId, "checkpoints"));
+}
+
+export async function getRunArtifacts(
+  jobId: string,
+  runId: string,
+): Promise<ArtifactRecord[]> {
+  return request<ArtifactRecord[]>(runActionPath(jobId, runId, "artifacts"));
+}
+
+export async function getRunCost(
+  jobId: string,
+  runId: string,
+): Promise<RunCost> {
+  return request<RunCost>(runActionPath(jobId, runId, "cost"));
+}
+
+/**
+ * URL builder for the run log stream.
+ * The viewer fetches this with raw fetch() + a ReadableStream reader so the
+ * Bearer token can be sent (EventSource cannot send Authorization headers);
+ * never pass this URL through request() — its timeout would abort the
+ * long-lived stream.
+ */
+export function runLogsUrl(jobId: string, runId: string, tail = 300): string {
+  const params = new URLSearchParams({ tail: String(tail), follow: "true" });
+  return `${API_BASE_URL}/api/v1/training-jobs/${encodeURIComponent(jobId)}/runs/${encodeURIComponent(runId)}/logs?${params.toString()}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -787,4 +921,151 @@ export const MOCK_USAGE_SUMMARY: UsageSummary = {
   by_scope: { training_job: 12.4 },
   by_kind: { training: 12.4 },
   event_count: 7,
+};
+
+// ---------------------------------------------------------------------------
+// Mock fallback dataset (Phase 2 demo only).
+// Two attempts of the RUNNING mock job: attempt 1 FAILED (OOM), attempt 2
+// RUNNING with a synthetic decaying loss curve.
+// ---------------------------------------------------------------------------
+
+const MOCK_RUN_ID_1 = "b1b1b1b1-b1b1-b1b1-b1b1-b1b1b1b1b1b1";
+const MOCK_RUN_ID_2 = "c2c2c2c2-c2c2-c2c2-c2c2-c2c2c2c2c2c2";
+const MOCK_JOB_ID = "99999999-9999-9999-9999-999999999999";
+
+export const MOCK_TRAINING_RUNS: TrainingRun[] = [
+  {
+    id: MOCK_RUN_ID_1,
+    job_id: MOCK_JOB_ID,
+    attempt: 1,
+    status: "FAILED",
+    provider: "local",
+    metrics: {},
+    artifacts: {},
+    logs: null,
+    error:
+      "CUDA out of memory: tried to allocate 2.1 GiB on device 0. Reduce batch_size or enable gradient checkpointing.",
+    started_at: "2026-09-26T10:21:00Z",
+    finished_at: "2026-09-26T10:24:37Z",
+  },
+  {
+    id: MOCK_RUN_ID_2,
+    job_id: MOCK_JOB_ID,
+    attempt: 2,
+    status: "RUNNING",
+    provider: "local",
+    metrics: {},
+    artifacts: {},
+    logs: null,
+    error: null,
+    started_at: "2026-09-26T10:31:00Z",
+    finished_at: null,
+  },
+];
+
+/** Deterministic decaying loss curve for the mock RUNNING attempt. */
+function mockLossSeries(): MetricSeries {
+  const points = Array.from({ length: 48 }, (_, i) => {
+    const step = (i + 1) * 25;
+    const value = 2.4 * Math.exp(-step / 900) + 0.28 + 0.04 * Math.sin(i / 3);
+    return {
+      step,
+      value: Math.round(value * 10000) / 10000,
+      ts: new Date(Date.UTC(2026, 8, 26, 10, 31, 0) + i * 45000).toISOString(),
+    };
+  });
+  return { name: "loss", points };
+}
+
+export const MOCK_RUN_METRICS: Record<string, RunMetrics> = {
+  [MOCK_RUN_ID_2]: {
+    run_id: MOCK_RUN_ID_2,
+    series: [
+      mockLossSeries(),
+      {
+        name: "lr",
+        points: mockLossSeries().points.map((p) => ({
+          step: p.step,
+          value: 0.0002,
+          ts: p.ts,
+        })),
+      },
+      {
+        name: "grad_norm",
+        points: mockLossSeries().points.map((p, i) => ({
+          step: p.step,
+          value:
+            Math.round(
+              (1.8 * Math.exp(-p.step / 1400) + 0.35 + 0.05 * Math.sin(i / 2)) *
+                10000,
+            ) / 10000,
+          ts: p.ts,
+        })),
+      },
+    ],
+    latest: {
+      loss: 0.6124,
+      lr: 0.0002,
+      grad_norm: 0.8211,
+      step: 1200,
+      epoch: 2,
+    },
+  },
+};
+
+export const MOCK_RUN_CHECKPOINTS: Record<string, CheckpointInfo[]> = {
+  [MOCK_RUN_ID_2]: [
+    {
+      id: "ckpt-0003",
+      epoch: 2,
+      step: 1200,
+      bytes: 482344960,
+      created_at: "2026-09-26T11:04:00Z",
+    },
+    {
+      id: "ckpt-0002",
+      epoch: 1,
+      step: 800,
+      bytes: 482344960,
+      created_at: "2026-09-26T10:47:00Z",
+    },
+    {
+      id: "ckpt-0001",
+      epoch: 1,
+      step: 400,
+      bytes: 482344960,
+      created_at: "2026-09-26T10:39:00Z",
+    },
+  ],
+};
+
+export const MOCK_RUN_ARTIFACTS: Record<string, ArtifactRecord[]> = {
+  [MOCK_RUN_ID_2]: [
+    {
+      name: "encoder-adapter",
+      version: 3,
+      sha256:
+        "9f2c4a7e1b5d83f06a4c2e9d1b7f5a3c8e6d2a1b4f7c9d3e5a6b8c1d2f4a7e9b",
+      bytes: 482344960,
+      created_at: "2026-09-26T11:04:12Z",
+    },
+    {
+      name: "tokenizer",
+      version: 1,
+      sha256:
+        "3a7d4e1f9b2c5a8d6e4f1a2b3c5d7e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d",
+      bytes: 4194304,
+      created_at: "2026-09-26T10:31:05Z",
+    },
+  ],
+};
+
+export const MOCK_RUN_COST: Record<string, RunCost> = {
+  [MOCK_RUN_ID_2]: {
+    run_id: MOCK_RUN_ID_2,
+    provider: "local",
+    seconds: 1830,
+    usd: 1.2708,
+    rate_usd_per_hour: 2.5,
+  },
 };

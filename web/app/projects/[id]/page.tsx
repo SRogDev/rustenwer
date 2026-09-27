@@ -270,7 +270,13 @@ export default async function ProjectDetailPage({
                     className="border-b border-line transition-colors duration-200 last:border-0 hover:bg-platinum/30"
                   >
                     <td className="px-4 py-3 font-semibold text-charcoal">
-                      {job.name}
+                      <Link
+                        href={`/projects/${id}/jobs/${job.id}`}
+                        aria-label={`View training job ${job.name}`}
+                        className="rounded underline decoration-platinum-deep underline-offset-4 transition-colors duration-200 hover:decoration-charcoal"
+                      >
+                        {job.name}
+                      </Link>
                       {job.error && (
                         <span className="mt-1 block max-w-xs text-xs font-normal text-[#8f1d1d]">
                           {job.error}
