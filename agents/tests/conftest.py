@@ -192,7 +192,7 @@ def _fake_propose_strategy(
         )
     return TrainingStrategy(
         model_family="embedding-ft",
-        architecture="small-embedding + linear head",
+        architecture={"type": "embedding-ft", "base": "small-embedding", "head": "linear"},
         training_method="embedding-ft",
         objective="maximize accuracy on labeled examples",
         hyperparameters={"rank": 16, "epochs": 3, "lr": 2e-4},
