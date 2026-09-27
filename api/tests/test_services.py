@@ -232,7 +232,11 @@ def test_propose_strategy_ml_path() -> None:
     baselines = run_baselines(spec, uuid4(), termination_dataset_rows(), label_column="label")
     strategy = propose_strategy(spec, diagnosis, baselines)
 
-    assert strategy.training_method == "embedding-ft"  # termination + small data
+    # Phase 5: the recommendation engine picks the method (no hardcoded branch).
+    assert strategy.training_method in {"classifier", "lora", "distillation"}
+    assert strategy.training_method == strategy.method_citations[0].split("@")[0]
+    assert strategy.method_citations  # "slug@version"-style citations
+    assert strategy.vetoed_methods  # vetoes recorded as data
     assert strategy.model_family is not None
     assert strategy.architecture is not None
     assert strategy.hyperparameters  # {rank/epochs/lr}-style defaults

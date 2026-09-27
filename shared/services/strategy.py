@@ -3,6 +3,11 @@
 The strategy agent DECIDES; the executor (Phase 2) executes (Rule 3).
 Rule 2: never assume fine-tuning is the answer — the strategy may be
 "none-deterministic" (Rule 13).
+
+Phase 5: method choice is a registry query, not a hardcoded branch. The
+recommendation engine (shared/services/methods.py — pure, framework-free,
+importable from both the agents and the API) ranks the method catalog and
+records vetoes as data.
 """
 
 from __future__ import annotations
@@ -21,6 +26,14 @@ def _row_count(baseline_report: BaselineReport | None) -> int:
     if baseline_report is None or not baseline_report.baselines:
         return 0
     return max(b.predictions_evaluated for b in baseline_report.baselines)
+
+
+def _recommend(spec, diagnosis, baseline_report):
+    """Consult the method recommendation engine (lazy import: shared/services
+    must stay framework-free so the LangGraph agents can import it)."""
+    from shared.services.methods import detect_environment, recommend_methods
+
+    return recommend_methods(spec, diagnosis, baseline_report, detect_environment())
 
 
 def propose_strategy(
@@ -67,31 +80,24 @@ def propose_strategy(
             baseline_bar=bar,
             rationale=justification,
             no_training_justification=justification,
+            method_citations=[],
+            vetoed_methods=[],
         )
 
     n_rows = _row_count(baseline_report)
     primitive = diagnosis.primitive.value
-    if primitive in ("classification", "termination"):
-        # Small labeled sets favor embedding fine-tunes; larger ones LoRA.
-        method = "embedding-ft" if n_rows < 1000 else "lora"
-    else:
-        method = "lora"
 
-    if method == "embedding-ft":
-        model_family = "small-encoder"
-        architecture: dict[str, Any] | None = {
-            "type": "embedding-ft",
-            "backbone": "MiniLM-class sentence encoder",
-            "head": "linear classifier",
-        }
-        hyperparameters = {"epochs": 5, "lr": 5e-5, "batch_size": 16}
-    else:
-        model_family = "llama-3-8b-class"
-        architecture = {
-            "type": "lora",
-            "base": "Llama-3-8B-class instruct model",
-        }
-        hyperparameters = {"rank": 16, "epochs": 3, "lr": 2e-4}
+    # Phase 5: the engine ranks the catalog; the agent takes the winner.
+    recommendation = _recommend(spec, diagnosis, baseline_report)
+    top = recommendation.recommended[0]
+    method = top.slug
+
+    from shared.services.methods import strategy_defaults_for
+
+    defaults = strategy_defaults_for(method)
+    model_family = defaults["model_family"]
+    architecture: dict[str, Any] | None = defaults["architecture"]
+    hyperparameters = dict(defaults["hyperparameters"])
 
     if bar is not None:
         objective = (
@@ -102,10 +108,16 @@ def propose_strategy(
     else:
         objective = f"Produce {primitive} intelligence meeting the spec."
 
+    vetoed_methods = [
+        {"slug": v.slug, "version": v.version, "reason": v.reason}
+        for v in recommendation.vetoed
+    ]
     rationale = (
         f"Diagnosis found ML necessary for primitive '{primitive}'. "
-        f"Method '{method}' chosen for primitive '{primitive}'; "
-        "baselines must be beaten before any candidate is accepted (Rule 9)."
+        f"Method '{method}' (citation {method}@{top.version}) ranked first by "
+        f"the method recommendation engine: {'; '.join(top.reasons)}. "
+        f"{len(vetoed_methods)} methods vetoed with reasons. "
+        "Baselines must be beaten before any candidate is accepted (Rule 9)."
     )
 
     return TrainingStrategy(
@@ -123,4 +135,6 @@ def propose_strategy(
         baseline_bar=bar,
         rationale=rationale,
         no_training_justification=None,
+        method_citations=list(recommendation.citations),
+        vetoed_methods=vetoed_methods,
     )

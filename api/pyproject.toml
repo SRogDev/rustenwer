@@ -2,7 +2,38 @@
 name = "rustenwer-api"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic",
+    "pydantic-settings",
+    "structlog",
+    "httpx",
+]
+
+[dependency-groups]
+# Dev tooling (was: requirements.txt "# dev" section)
+dev = ["pytest", "ruff"]
+# Phase 2 training extras: real local CPU training (torch) + numpy.
+# Install with: uv sync --group train
+# The base API stays torch-free so the service boots anywhere; adapters
+# raise a clear error when torch is missing.
+train = ["torch==2.14.0", "numpy==2.5.3"]
+
+[tool.uv]
+# The project itself is not installed into the venv (tests run with
+# pythonpath=["."], mirroring the previous pip-based venvs).
+package = false
+
+# torch CPU wheels live on the PyTorch index, not PyPI.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+# Only torch needs the PyTorch CPU index; numpy resolves from PyPI.
+torch = [{ index = "pytorch-cpu" }]
 
 [tool.ruff]
 line-length = 100

@@ -136,6 +136,17 @@ Cost:
 |---|---|---|---|
 | GET | `/api/v1/projects/{project_id}/usage/rollups` | bearer | per-scope cost rollups (training_job, model, deployment, evaluation, inference) |
 
+### Phase 5 — Training Method Knowledge
+
+Method catalog (seeded, plan §10 taxonomy / §11 structured representation):
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/api/v1/methods` | bearer | list catalog; filter `?category=` / `?status=` (`VALIDATED`\|`KNOWN`) |
+| GET | `/api/v1/methods/{slug}` | bearer | `{versions[], current}` for one method; `404` unknown |
+| POST | `/api/v1/methods/recommend` | bearer | `{spec, diagnosis, baseline_report?, allow_generic?}` → `MethodRecommendation` (ranked + vetoed + citations) |
+| GET | `/api/v1/research` | bearer | seeded research findings (plan §52) |
+
 ### Phase 3 contract amendments
 
 - `EvaluationStatus` gains `CANCELLED`.
@@ -158,6 +169,17 @@ the canonical schema.
 Errors: `{detail: string}` with standard HTTP codes.
 
 ## Changelog
+
+- 2026-09-27 — Phase 5 contract: `MethodCategory` (11 §10 values),
+  `MethodValidationStatus` (`VALIDATED`|`KNOWN`), `TrainingMethod` (§11,
+  versioned/immutable), `AdapterRegistration` (§54), `ResearchFinding`
+  (§52), `MethodRank`, `MethodVeto`, `MethodRecommendation`; `TrainingStrategy`
+  gains `method_citations: string[]` and `vetoed_methods:
+  {slug, version, reason}[]`. Pure recommendation engine in
+  `shared/services/methods.py` (veto predicates + deterministic spec-driven
+  ranking, §30 — no global weights); `propose_strategy` consults it via lazy
+  import (Rule 3 kept: agents decide, adapters execute). Full endpoint table
+  above; migration `005_phase5_methods.sql` is the canonical schema.
 
 - 2026-09-27 — Phase 3 contract: `SubjectKind`, `EvaluationSubject`,
   `QualityVector` (plan §30), `Benchmark` (plan §57), `EvaluationRun`,

@@ -174,7 +174,21 @@ and falls back to mock data only when the API is unreachable.
   termination v1 (`progress_score <= 0.21 → stop`) deployed, activated,
   and invoked over HTTP. 242+23 tests green; web tsc/Biome/build green.
   Full record: docs/PHASE4.md (includes the Spanish deep-dive lesson).
-- [ ] **Phase 5 — Training Method Knowledge**: method registry + adapters.
+- [x] **Phase 5 — Training Method Knowledge** (2026-09-27): method choice
+  is a registry query, not a hardcoded branch — seeded 13-method catalog
+  (plan §10 taxonomy; VALIDATED: classifier/lora/qlora/distillation/
+  contrastive, KNOWN: the rest, honestly vetoed), pure recommendation
+  engine (`shared/services/methods.py`, usable from agents and API) with
+  named veto predicates (qlora needs CUDA, unregistered methods, labeled
+  data for distillation, contrastive only for similarity-ish tasks) and
+  deterministic spec-driven ranking (no global weights), `POST
+  /methods/recommend` + catalog/research endpoints, real CPU
+  `DistillationAdapter` (teacher→student soft targets, thesis pinned by
+  test) and `ContrastiveAdapter` (SupCon loss, nearest-centroid retrieval
+  eval), `TrainingStrategy` gains `method_citations` + `vetoed_methods`
+  (negative-search data for Phase 7), migration 005 canonical schema.
+  271+23 tests green; ruff clean. Full record: docs/PHASE5.md (includes
+  the Spanish deep-dive lesson).
 - [ ] **Phase 6 — Candidate Experiment Engine**: experiments, search
   strategies, promotion/rollback.
 - [ ] **Phase 7 — Intelligence Discovery**: architecture agent, discovery

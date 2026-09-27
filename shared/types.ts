@@ -249,6 +249,10 @@ export interface TrainingStrategy {
   rationale: string;
   /** Set when ml_necessary === false: why no training is the right call. */
   no_training_justification: string | null;
+  /** Phase 5: 'lora@1'-style citations of the ranked methods. */
+  method_citations: string[];
+  /** Phase 5: [{slug, version, reason}] — negative-search data for Phase 7. */
+  vetoed_methods: Array<{ slug: string; version: number; reason: string }>;
 }
 
 /** Training Job — expensive operation with an explicit lifecycle (§42).
@@ -612,4 +616,105 @@ export interface UsageRollups {
 /** Job status transition request (§42). */
 export interface JobTransition {
   to: JobStatus;
+}
+
+/* ------------------------------------------------------------------ */
+/* Phase 5 — Training method knowledge (plan §10, §11, §52, §54)        */
+/* ------------------------------------------------------------------ */
+
+/** Training-method taxonomy categories (plan §10). */
+export type MethodCategory =
+  | 'supervised'
+  | 'peft'
+  | 'self_supervised'
+  | 'preference_optimization'
+  | 'reinforcement_learning'
+  | 'distillation'
+  | 'contrastive'
+  | 'synthetic_data'
+  | 'curriculum'
+  | 'search_evolutionary'
+  | 'hybrid';
+
+export const METHOD_CATEGORIES: readonly MethodCategory[] = [
+  'supervised', 'peft', 'self_supervised', 'preference_optimization',
+  'reinforcement_learning', 'distillation', 'contrastive',
+  'synthetic_data', 'curriculum', 'search_evolutionary', 'hybrid',
+] as const;
+
+/** How much the platform trusts a training method (plan §11). */
+export type MethodValidationStatus = 'VALIDATED' | 'KNOWN';
+
+/** One training method (plan §11) — structured, versioned knowledge.
+ *  Versions are immutable: a new version is a NEW record, never an edit. */
+export interface TrainingMethod {
+  /** e.g. 'lora' */
+  slug: string;
+  name: string;
+  category: MethodCategory;
+  version: number;
+  status: MethodValidationStatus;
+  /** primitive names the method fits */
+  supported_tasks: string[];
+  /** {min_rows, labeled: boolean, pairwise: boolean} */
+  data_requirements: Record<string, unknown>;
+  /** {gpu_required, min_vram_gb, rough_cost_per_hour_usd, typical_latency_ms_p50} */
+  compute_requirements: Record<string, unknown>;
+  strengths: string[];
+  weaknesses: string[];
+  failure_modes: string[];
+  compatible_architectures: string[];
+  compatible_objectives: string[];
+  evaluation_requirements: string[];
+  /** adapter names; empty when no adapter exists */
+  implementation_templates: string[];
+  locally_runnable: boolean;
+  notes: string;
+}
+
+/** Link between a training method version and its executor (plan §54). */
+export interface AdapterRegistration {
+  method_slug: string;
+  method_version: number;
+  /** key in app.training.adapters.ADAPTERS */
+  adapter_name: string;
+  template_ref: string;
+  locally_runnable: boolean;
+  notes: string;
+}
+
+/** One distilled research finding (plan §52). */
+export interface ResearchFinding {
+  technique: string;
+  useful_for: string[];
+  requires: string[];
+  advantage: string;
+  weakness: string;
+  /** e.g. 'validated: phase-5 e2e' */
+  source: string;
+  version: number;
+}
+
+/** One ranked method from the recommendation engine. */
+export interface MethodRank {
+  slug: string;
+  version: number;
+  score: number;
+  reasons: string[];
+}
+
+/** One explicitly ruled-out method — negative search seed for Phase 7. */
+export interface MethodVeto {
+  slug: string;
+  version: number;
+  reason: string;
+}
+
+/** Result of recommend_methods() (plan §3). */
+export interface MethodRecommendation {
+  recommended: MethodRank[];
+  vetoed: MethodVeto[];
+  /** 'lora@1'-style citations of the ranked methods */
+  citations: string[];
+  note: string;
 }

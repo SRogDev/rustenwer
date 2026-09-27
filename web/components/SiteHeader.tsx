@@ -45,6 +45,14 @@ export function SiteHeader() {
             </li>
             <li>
               <Link
+                href="/methods"
+                className="flex min-h-[44px] items-center rounded-md px-3 text-sm font-medium text-ink transition-colors duration-200 hover:bg-platinum"
+              >
+                Methods
+              </Link>
+            </li>
+            <li>
+              <Link
                 href="/projects"
                 className="flex min-h-[44px] items-center rounded-md bg-charcoal px-4 text-sm font-semibold text-platinum transition-colors duration-200 hover:bg-charcoal-soft"
               >

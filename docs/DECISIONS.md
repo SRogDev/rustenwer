@@ -2,6 +2,32 @@
 
 Durable decisions made during the build. New entries go on top.
 
+## 2026-09-27 — Phase 5 backend
+
+- **Pure engine, thin HTTP layer**: `shared/services/methods.py` has NO
+  FastAPI/torch imports at module level — the agents builder codes against
+  it directly and both sides import the SAME recommendation engine.
+  `api/app/methods/` holds only routers/registry/HTTP glue.
+- **`propose_strategy` delegates method choice**: the hardcoded
+  embedding-ft→lora heuristic is gone; the strategy agent consults the
+  engine and takes the top rank, storing `method_citations` + `vetoed_methods`
+  on the strategy — exactly the negative-search data Phase 7 consumes
+  (§31/§46).
+- **Recommendation engine ranking rules** (spec-driven, §30 — no global
+  weights): classifier wins strict-latency-budget classification specs
+  (its `typical_latency_ms` band undercuts lora); lora wins default specs
+  (spec text matches "generalize beyond exact matches" — keyword-heavy
+  specs like termination favor semantic methods); classifier keeps its
+  thesis; contrastive ranks for similarity-ish primitives only.
+- **Real bugs caught by learning tests**: (1) contrastive tower used
+  `F.normalize(..., dim=1)`, which for `(B,K,D)` negative tensors normalizes
+  over the K axis — the model gamed the loss; fixed to `dim=-1`.
+  (2) 1-positive InfoNCE collapsed to a constant embedding (loss → log(1+K))
+  on the ring task; switched to supervised-contrastive (all same-class
+  in-batch samples as positives) — retrieval accuracy 0.95.
+- **`ResearchFinding` fields are required**, not optional — a finding
+  without source/useful-for/advantage/weakness is not a finding (§52).
+
 ## 2026-09-26 — Phase 1 integration (coordinator)
 
 - **In-memory repos kept for Phase 1** (no Supabase credentials exist);

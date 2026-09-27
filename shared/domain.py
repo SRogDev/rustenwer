@@ -305,6 +305,11 @@ class TrainingStrategy(BaseModel):
     baseline_bar: QualityBar | None = None
     rationale: str = ""
     no_training_justification: str | None = None  # Set when ml_necessary is False.
+    # Phase 5: the method knowledge that drove the decision (plan §3, §11).
+    # method_citations: "lora@1"-style citations of the ranked methods.
+    # vetoed_methods: [{slug, version, reason}] — negative-search data for Phase 7.
+    method_citations: list[str] = Field(default_factory=list)
+    vetoed_methods: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class TrainingJob(BaseModel):
@@ -787,6 +792,118 @@ class Deployment(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
     created_at: str
     updated_at: str
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 — Training method knowledge (plan §10, §11, §52, §54)
+# ---------------------------------------------------------------------------
+
+
+class MethodCategory(StrEnum):
+    """Training-method taxonomy categories (plan §10)."""
+
+    SUPERVISED = "supervised"
+    PEFT = "peft"
+    SELF_SUPERVISED = "self_supervised"
+    PREFERENCE_OPTIMIZATION = "preference_optimization"
+    REINFORCEMENT_LEARNING = "reinforcement_learning"
+    DISTILLATION = "distillation"
+    CONTRASTIVE = "contrastive"
+    SYNTHETIC_DATA = "synthetic_data"
+    CURRICULUM = "curriculum"
+    SEARCH_EVOLUTIONARY = "search_evolutionary"
+    HYBRID = "hybrid"
+
+
+class MethodValidationStatus(StrEnum):
+    """How much the platform trusts a training method (plan §11).
+
+    VALIDATED = a real local or GPU run exists for it on our stack.
+    KNOWN = taxonomy entry, not yet validated — honest about the gap.
+    """
+
+    VALIDATED = "VALIDATED"
+    KNOWN = "KNOWN"
+
+
+class TrainingMethod(BaseModel):
+    """One training method (plan §11) — structured, versioned knowledge.
+
+    Versions are immutable: a new version is a NEW record, never an edit.
+    """
+
+    slug: str  # e.g. "lora"
+    name: str
+    category: MethodCategory
+    version: int = 1
+    status: MethodValidationStatus
+    supported_tasks: list[str] = Field(default_factory=list)  # primitive names it fits
+    data_requirements: dict[str, Any] = Field(
+        default_factory=dict
+    )  # {min_rows, labeled: bool, pairwise: bool}
+    compute_requirements: dict[str, Any] = Field(
+        default_factory=dict
+    )  # {gpu_required, min_vram_gb, rough_cost_per_hour_usd, typical_latency_ms_p50}
+    strengths: list[str] = Field(default_factory=list)
+    weaknesses: list[str] = Field(default_factory=list)
+    failure_modes: list[str] = Field(default_factory=list)
+    compatible_architectures: list[str] = Field(default_factory=list)
+    compatible_objectives: list[str] = Field(default_factory=list)
+    evaluation_requirements: list[str] = Field(default_factory=list)
+    implementation_templates: list[str] = Field(default_factory=list)  # adapter names
+    locally_runnable: bool = False
+    notes: str = ""
+
+
+class AdapterRegistration(BaseModel):
+    """Link between a training method version and its executor (plan §54)."""
+
+    method_slug: str
+    method_version: int
+    adapter_name: str  # key in app.training.adapters.ADAPTERS
+    template_ref: str = ""
+    locally_runnable: bool = False
+    notes: str = ""
+
+
+class ResearchFinding(BaseModel):
+    """One distilled research finding (plan §52): what technique, when it
+    helps, what it needs, where it wins and where it breaks."""
+
+    technique: str
+    useful_for: list[str]
+    requires: list[str]
+    advantage: str
+    weakness: str
+    source: str  # e.g. "validated: phase-5 e2e"
+    version: int = 1
+
+
+class MethodRank(BaseModel):
+    """One ranked method from the recommendation engine."""
+
+    slug: str
+    version: int
+    score: float
+    reasons: list[str] = Field(default_factory=list)
+
+
+class MethodVeto(BaseModel):
+    """One explicitly ruled-out method (plan §3: negative search seed for
+    Phase 7 — stored as data, not prose)."""
+
+    slug: str
+    version: int
+    reason: str
+
+
+class MethodRecommendation(BaseModel):
+    """Result of recommend_methods() (plan §3)."""
+
+    recommended: list[MethodRank] = Field(default_factory=list)
+    vetoed: list[MethodVeto] = Field(default_factory=list)
+    citations: list[str] = Field(default_factory=list)  # "lora@1" style
+    note: str = ""
 
 
 class UsageEvent(BaseModel):

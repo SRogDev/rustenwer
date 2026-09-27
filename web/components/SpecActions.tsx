@@ -23,6 +23,7 @@ import {
   listDatasetVersions,
   runEvaluation,
 } from "../lib/api";
+import { MethodRecommendationPanel } from "./MethodRecommendationPanel";
 import { StatusPill } from "./StatusPill";
 
 function formatPercent(value: number | null): string {
@@ -395,6 +396,12 @@ export function SpecActions({
       )}
 
       {diagnosis && <DiagnosisCard diagnosis={diagnosis} />}
+
+      <MethodRecommendationPanel
+        specId={specId}
+        diagnosis={diagnosis}
+        evaluations={evaluations}
+      />
 
       <div className="rounded-xl border border-line bg-card p-5 sm:p-6">
         <h3 className="flex items-center gap-2 font-display text-lg font-bold text-charcoal">

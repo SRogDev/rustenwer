@@ -2,7 +2,20 @@
 name = "rustenwer-agents"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "langgraph",
+    "pydantic",
+    "structlog",
+]
+
+[dependency-groups]
+dev = ["pytest", "ruff"]
+
+[tool.uv]
+# The project itself is not installed into the venv (tests import the
+# `agents` and `shared` packages from the repo root), mirroring the
+# previous pip-based venvs.
+package = false
 
 [tool.ruff]
 line-length = 100

@@ -944,6 +944,8 @@ export const MOCK_TRAINING_JOBS: TrainingJob[] = [
       rationale:
         "Learned policy for the termination decision; must beat the deterministic_rule baseline.",
       no_training_justification: null,
+      method_citations: [],
+      vetoed_methods: [],
     },
     compute_budget: { max_gpu_hours: 0.5, max_cost_usd: 5.12 },
     error: null,

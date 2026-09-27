@@ -732,6 +732,581 @@ class QLoRAAdapter:
 
 
 # --------------------------------------------------------------------------
+# DistillationAdapter — teacher MLP -> temperature-scaled soft targets -> student
+# --------------------------------------------------------------------------
+
+
+class _TeacherMLP(_TorchSupervisedAdapter):
+    """Internal teacher trainer for distillation (reuses the supervised loop)."""
+
+    name = "distillation-teacher"
+
+    def __init__(self, hidden: list[int]) -> None:
+        self._hidden = hidden
+
+    def build_model(self, dataset_info: dict[str, Any], hp: dict[str, Any], seed: int):
+        torch = _torch()
+        torch.manual_seed(seed)
+        layers: list[Any] = []
+        prev = int(dataset_info["n_features"])
+        for h in self._hidden:
+            layers += [torch.nn.Linear(prev, int(h)), torch.nn.ReLU()]
+            prev = int(h)
+        layers.append(torch.nn.Linear(prev, int(dataset_info["n_classes"])))
+        return torch.nn.Sequential(*layers)
+
+
+def _build_mlp(torch: Any, n_features: int, hidden: list[int], n_classes: int) -> Any:
+    layers: list[Any] = []
+    prev = n_features
+    for h in hidden:
+        layers += [torch.nn.Linear(prev, int(h)), torch.nn.ReLU()]
+        prev = int(h)
+    layers.append(torch.nn.Linear(prev, n_classes))
+    return torch.nn.Sequential(*layers)
+
+
+class DistillationAdapter:
+    """Knowledge distillation (plan §10): a large teacher MLP trains on the
+    synthetic blobs, then a small student learns from temperature-scaled
+    soft targets: L = α·CE(student, y) + (1−α)·T²·KL(student/T ‖ teacher/T).
+
+    The thesis under test: student-with-distillation ≥ student-from-scratch
+    on the same seeded task. Reuses the supervised loop for the teacher and
+    the shared checkpoint format for the student.
+    """
+
+    name = "distillation"
+
+    def validate(self, strategy: TrainingStrategy) -> list[str]:
+        errors: list[str] = []
+        if strategy.training_method != "distillation":
+            errors.append(
+                f"distillation adapter needs training_method='distillation', "
+                f"got {strategy.training_method!r}"
+            )
+        hp = strategy.hyperparameters or {}
+        try:
+            if float(hp.get("temperature", 4.0)) <= 0:
+                errors.append("hyperparameters.temperature must be > 0")
+        except (TypeError, ValueError):
+            errors.append("hyperparameters.temperature must be a positive number")
+        try:
+            alpha = float(hp.get("alpha", 0.5))
+            if not 0.0 <= alpha <= 1.0:
+                errors.append("hyperparameters.alpha must be in [0, 1]")
+        except (TypeError, ValueError):
+            errors.append("hyperparameters.alpha must be a number in [0, 1]")
+        return errors
+
+    def supports_provider(self, provider: str) -> str | None:
+        # Pure CPU torch math — runs wherever torch runs.
+        return None
+
+    def prepare(self, ctx: AdapterContext) -> dict[str, Any]:
+        return _prepare_blobs(ctx)
+
+    def estimate(
+        self, strategy: TrainingStrategy, dataset_info: dict[str, Any] | None = None
+    ) -> CostEstimate:
+        torch = _torch()
+        hp = strategy.hyperparameters or {}
+        info = dataset_info or {"n_features": 20, "n_classes": 2}
+        torch.manual_seed(0)
+        teacher = _build_mlp(torch, int(info["n_features"]), [128, 64], int(info["n_classes"]))
+        student = _build_mlp(torch, int(info["n_features"]), [32], int(info["n_classes"]))
+        _, trainable = _count_params(student)
+        total_teacher, _ = _count_params(teacher)
+        epochs = int(hp.get("epochs", 10))
+        n_train = int(hp.get("n_train", 2000))
+        est_seconds = epochs * (n_train / 1000) * 4.0  # teacher + student passes
+        return CostEstimate(
+            est_seconds=est_seconds,
+            est_cost_usd=est_seconds / 3600 * 0.02,
+            est_params=trainable,
+            notes=(
+                f"distillation: {trainable} student params; "
+                f"teacher {total_teacher} params (CPU estimate)"
+            ),
+        )
+
+    # -- checkpoint passthrough ----------------------------------------
+
+    def save_checkpoint(self, state: dict[str, Any], path: Path) -> None:
+        _save_checkpoint(state, path)
+
+    def load_checkpoint(self, path: Path) -> dict[str, Any]:
+        return _load_checkpoint(path)
+
+    # -- training -------------------------------------------------------
+
+    def train(self, ctx: TrainContext, dataset_info: dict[str, Any]) -> dict[str, Any]:
+        torch = _torch()
+        hp = ctx.hyperparameters
+        epochs = int(hp.get("epochs", 10))
+        lr = float(hp.get("lr", 0.05))
+        batch_size = int(hp.get("batch_size", 128))
+        temperature = float(hp.get("temperature", 4.0))
+        alpha = float(hp.get("alpha", 0.5))
+        teacher_hidden: list[int] = list(hp.get("teacher_hidden", [128, 64]))
+        student_hidden: list[int] = list(hp.get("student_hidden", [32]))
+        teacher_hp = dict(hp.get("teacher_hp", {}))
+        teacher_epochs = int(teacher_hp.get("epochs", max(epochs, 8)))
+
+        data = torch.load(dataset_info["path"], map_location="cpu", weights_only=True)
+        X_train, y_train = data["X_train"], data["y_train"]
+        n = X_train.shape[0]
+        n_features = int(dataset_info["n_features"])
+        n_classes = int(dataset_info["n_classes"])
+
+        # --- teacher stage (idempotent: skipped when teacher.pt exists) ---
+        teacher_path = ctx.workdir / "teacher.pt"
+        torch.manual_seed(ctx.seed)
+        teacher = _build_mlp(torch, n_features, teacher_hidden, n_classes)
+        if teacher_path.exists():
+            teacher.load_state_dict(
+                torch.load(str(teacher_path), map_location="cpu", weights_only=True)["model"]
+            )
+            ctx.emit({"type": "log", "line": "teacher loaded from teacher.pt (cached)"})
+            teacher_val_acc = float(teacher_hp.get("cached_val_accuracy", float("nan")))
+        else:
+            def _teacher_emit(event: dict[str, Any]) -> None:
+                if event.get("type") == "metric":
+                    event = {**event, "name": f"teacher_{event['name']}"}
+                ctx.emit(event)
+
+            teacher_ctx = TrainContext(
+                strategy=ctx.strategy,
+                workdir=ctx.workdir / "teacher",
+                hyperparameters={**teacher_hp, "epochs": teacher_epochs,
+                                 "hidden": teacher_hidden},
+                seed=ctx.seed,
+                emit=_teacher_emit,
+                should_stop=ctx.should_stop,
+            )
+            teacher_trainer = _TeacherMLP(teacher_hidden)
+            teacher_result = teacher_trainer.train(teacher_ctx, dataset_info)
+            if teacher_result.get("stopped"):
+                return teacher_result  # graceful stop during the teacher stage
+            final_ckpt = (ctx.workdir / "teacher" / "checkpoints"
+                          / f"ckpt-{teacher_epochs - 1:04d}.pt")
+            teacher_state = teacher_trainer.load_checkpoint(final_ckpt)
+            teacher.load_state_dict(teacher_state["model"])
+            _save_checkpoint(
+                {"model": teacher.state_dict(),
+                 "val_accuracy": teacher_result["val_accuracy"]},
+                teacher_path,
+            )
+            teacher_val_acc = float(teacher_result["val_accuracy"])
+            ctx.emit({"type": "log",
+                      "line": f"teacher trained: val_acc={teacher_val_acc:.4f}"})
+        teacher.eval()
+
+        # --- student stage: distillation loss ----------------------------
+        torch.manual_seed(ctx.seed + 1)
+        student = _build_mlp(torch, n_features, student_hidden, n_classes)
+        opt = torch.optim.SGD(
+            [p for p in student.parameters() if p.requires_grad],
+            lr=lr, momentum=float(hp.get("momentum", 0.9)),
+        )
+        ce = torch.nn.CrossEntropyLoss()
+        ckpt_dir = ctx.workdir / "checkpoints"
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
+
+        start_epoch, step = 0, 0
+        resumed_from_epoch: int | None = None
+        if ctx.resume_from is not None:
+            state = self.load_checkpoint(Path(ctx.resume_from))
+            student.load_state_dict(state["model"])
+            opt.load_state_dict(state["optimizer"])
+            start_epoch = int(state["epoch"]) + 1
+            step = int(state["step"])
+            resumed_from_epoch = int(state["epoch"])
+            if "rng" in state:
+                torch.set_rng_state(state["rng"])
+            ctx.emit({"type": "log",
+                      "line": f"resumed student from checkpoint epoch {state['epoch']}"})
+
+        gen = torch.Generator().manual_seed(ctx.seed + 999)
+        final_loss, val_acc = float("nan"), 0.0
+        for epoch in range(start_epoch, epochs):
+            student.train()
+            perm = torch.randperm(n, generator=gen)
+            epoch_loss, batches = 0.0, 0
+            for i in range(0, n, batch_size):
+                stop = ctx.should_stop()
+                if stop is not None:
+                    ckpt = ckpt_dir / f"ckpt-{epoch:04d}.pt"
+                    last_done = epoch - 1
+                    self.save_checkpoint(
+                        {"epoch": last_done, "step": step,
+                         "model": student.state_dict(),
+                         "optimizer": opt.state_dict(),
+                         "rng": torch.get_rng_state()}, ckpt)
+                    ctx.emit({"type": "checkpoint", "id": ckpt.stem, "epoch": last_done,
+                              "step": step, "path": str(ckpt)})
+                    return {"stopped": stop, "epochs": epoch,
+                            "resumed_from_epoch": resumed_from_epoch}
+                idx = perm[i:i + batch_size]
+                xb, yb = X_train[idx], y_train[idx]
+                opt.zero_grad()
+                with torch.no_grad():
+                    teacher_logits = teacher(xb)
+                student_logits = student(xb)
+                hard = ce(student_logits, yb)
+                soft = torch.nn.functional.kl_div(
+                    torch.nn.functional.log_softmax(student_logits / temperature, dim=1),
+                    torch.nn.functional.softmax(teacher_logits / temperature, dim=1),
+                    reduction="batchmean",
+                ) * (temperature ** 2)
+                loss = alpha * hard + (1.0 - alpha) * soft
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(student.parameters(), 1.0)
+                opt.step()
+                epoch_loss += float(loss.item())
+                batches += 1
+                step += 1
+
+            final_loss = epoch_loss / max(batches, 1)
+            val_acc = _accuracy_of(torch, student, data)
+            ctx.emit({"type": "metric", "name": "loss_epoch",
+                      "epoch": epoch, "step": step, "value": final_loss})
+            ctx.emit({"type": "metric", "name": "val_accuracy",
+                      "epoch": epoch, "step": step, "value": val_acc})
+            ctx.emit({"type": "log",
+                      "line": f"distill epoch {epoch}: loss={final_loss:.4f} "
+                              f"val_acc={val_acc:.4f}"})
+            ckpt = ckpt_dir / f"ckpt-{epoch:04d}.pt"
+            self.save_checkpoint(
+                {"epoch": epoch, "step": step,
+                 "model": student.state_dict(),
+                 "optimizer": opt.state_dict(),
+                 "rng": torch.get_rng_state()}, ckpt)
+            ctx.emit({"type": "checkpoint", "id": ckpt.stem, "epoch": epoch,
+                      "step": step, "path": str(ckpt)})
+
+        total, trainable = _count_params(student)
+        return {
+            "epochs": epochs, "final_loss": final_loss,
+            "val_accuracy": val_acc, "teacher_val_accuracy": teacher_val_acc,
+            "total_params": total, "trainable_params": trainable,
+            "state": {"model": student.state_dict()},
+            "resumed_from_epoch": resumed_from_epoch,
+        }
+
+    # -- evaluation / export --------------------------------------------
+
+    def _student_model(self, dataset_info: dict[str, Any], hp: dict[str, Any], seed: int):
+        torch = _torch()
+        torch.manual_seed(seed)
+        return _build_mlp(
+            torch, int(dataset_info["n_features"]),
+            list(hp.get("student_hidden", [32])), int(dataset_info["n_classes"]),
+        )
+
+    def evaluate(
+        self, ctx: AdapterContext, state: dict[str, Any], dataset_info: dict[str, Any]
+    ) -> dict[str, float]:
+        torch = _torch()
+        data = torch.load(dataset_info["path"], map_location="cpu", weights_only=True)
+        model = self._student_model(dataset_info, ctx.hyperparameters, ctx.seed)
+        model.load_state_dict(state["model"])
+        model.eval()
+        with torch.no_grad():
+            logits = model(data["X_val"])
+            loss = float(torch.nn.CrossEntropyLoss()(logits, data["y_val"]).item())
+        return {"val_accuracy": _accuracy_of(torch, model, data), "val_loss": loss}
+
+    def export(
+        self,
+        ctx: AdapterContext,
+        state: dict[str, Any],
+        dataset_info: dict[str, Any],
+        out_dir: Path,
+    ) -> dict[str, Any]:
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        model_path = out_dir / "model.pt"
+        _save_checkpoint(state, model_path)
+        config = {
+            "training_method": self.name,
+            "student_hidden": list(ctx.hyperparameters.get("student_hidden", [32])),
+            "teacher_hidden": list(ctx.hyperparameters.get("teacher_hidden", [128, 64])),
+            "temperature": float(ctx.hyperparameters.get("temperature", 4.0)),
+            "alpha": float(ctx.hyperparameters.get("alpha", 0.5)),
+            "n_features": dataset_info["n_features"],
+            "n_classes": dataset_info["n_classes"],
+            "hyperparameters": ctx.hyperparameters,
+            "seed": ctx.seed,
+        }
+        config_path = out_dir / "config.json"
+        config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+        return {"files": {"model": str(model_path), "config": str(config_path)}}
+
+
+def _accuracy_of(torch: Any, model: Any, data: dict[str, Any]) -> float:
+    model.eval()
+    with torch.no_grad():
+        pred = model(data["X_val"]).argmax(dim=1)
+        return float((pred == data["y_val"]).float().mean().item())
+
+
+# --------------------------------------------------------------------------
+# ContrastiveAdapter — embedding tower + InfoNCE-style loss over pairs
+# --------------------------------------------------------------------------
+
+
+class ContrastiveAdapter:
+    """Contrastive representation learning (plan §10): a small embedding
+    tower trained with a supervised-contrastive (SupCon-style) loss over
+    synthetic similar/dissimilar pairs (same class = similar): every
+    same-class sample in the batch is a positive, everything else a
+    negative. Evaluation reports retrieval-style accuracy: nearest-centroid
+    classification on val embeddings."""
+
+    name = "contrastive"
+
+    def validate(self, strategy: TrainingStrategy) -> list[str]:
+        errors: list[str] = []
+        if strategy.training_method != "contrastive":
+            errors.append(
+                f"contrastive adapter needs training_method='contrastive', "
+                f"got {strategy.training_method!r}"
+            )
+        hp = strategy.hyperparameters or {}
+        try:
+            if int(hp.get("embedding_dim", 32)) < 1:
+                errors.append("hyperparameters.embedding_dim must be >= 1")
+        except (TypeError, ValueError):
+            errors.append("hyperparameters.embedding_dim must be an integer >= 1")
+        return errors
+
+    def supports_provider(self, provider: str) -> str | None:
+        # Pure CPU torch math — runs wherever torch runs.
+        return None
+
+    def prepare(self, ctx: AdapterContext) -> dict[str, Any]:
+        return _prepare_blobs(ctx)
+
+    def estimate(
+        self, strategy: TrainingStrategy, dataset_info: dict[str, Any] | None = None
+    ) -> CostEstimate:
+        torch = _torch()
+        hp = strategy.hyperparameters or {}
+        info = dataset_info or {"n_features": 20, "n_classes": 2}
+        torch.manual_seed(0)
+        total, trainable = _count_params(
+            self.build_model(info, hp, 0)
+        )
+        epochs = int(hp.get("epochs", 10))
+        n_train = int(hp.get("n_train", 2000))
+        est_seconds = epochs * (n_train / 1000) * 3.0
+        return CostEstimate(
+            est_seconds=est_seconds,
+            est_cost_usd=est_seconds / 3600 * 0.02,
+            est_params=trainable,
+            notes=f"contrastive: {trainable} trainable of {total} total params (CPU estimate)",
+        )
+
+    def build_model(self, dataset_info: dict[str, Any], hp: dict[str, Any], seed: int):
+        torch = _torch()
+        import torch.nn as nn
+        import torch.nn.functional as F
+
+        dim = int(hp.get("embedding_dim", 32))
+
+        class EmbeddingTower(nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                torch.manual_seed(seed)
+                self.net = nn.Sequential(
+                    nn.Linear(int(dataset_info["n_features"]), 64),
+                    nn.ReLU(),
+                    nn.Linear(64, dim),
+                )
+
+            def forward(self, x):  # type: ignore[no-untyped-def]
+                # dim=-1: normalize over the feature axis for both (B, D)
+                # and (B, K, D) inputs (dim=1 would wrongly normalize over
+                # the K negatives axis for batched negatives).
+                return F.normalize(self.net(x), p=2, dim=-1)
+
+        return EmbeddingTower()
+
+    # -- checkpoint passthrough ----------------------------------------
+
+    def save_checkpoint(self, state: dict[str, Any], path: Path) -> None:
+        _save_checkpoint(state, path)
+
+    def load_checkpoint(self, path: Path) -> dict[str, Any]:
+        return _load_checkpoint(path)
+
+    # -- training -------------------------------------------------------
+
+    @staticmethod
+    def _supcon_loss(torch: Any, emb: Any, y: Any, temperature: float) -> Any:
+        """Supervised contrastive loss: every same-class in-batch sample is a
+        positive, the rest negatives. Per anchor:
+        L = logsumexp(all sims) - logsumexp(positive sims)."""
+        b = emb.shape[0]
+        sim = (emb @ emb.t()) / temperature
+        eye = torch.eye(b, dtype=torch.bool, device=emb.device)
+        log_denom = torch.logsumexp(sim.masked_fill(eye, float("-inf")), dim=1)
+        same = y.unsqueeze(0) == y.unsqueeze(1)
+        same.fill_diagonal_(False)
+        log_num = torch.logsumexp(sim.masked_fill(~same, float("-inf")), dim=1)
+        per_anchor = log_denom - log_num
+        valid = same.sum(dim=1) > 0  # anchors with at least one positive
+        if not bool(valid.any()):
+            return sim.new_zeros(())
+        return per_anchor[valid].mean()
+
+    def train(self, ctx: TrainContext, dataset_info: dict[str, Any]) -> dict[str, Any]:
+        torch = _torch()
+        hp = ctx.hyperparameters
+        epochs = int(hp.get("epochs", 10))
+        lr = float(hp.get("lr", 0.05))
+        batch_size = int(hp.get("batch_size", 128))
+        temperature = float(hp.get("temperature", 0.1))
+
+        data = torch.load(dataset_info["path"], map_location="cpu", weights_only=True)
+        X_train, y_train = data["X_train"], data["y_train"]
+        n = X_train.shape[0]
+
+        torch.manual_seed(ctx.seed)
+        model = self.build_model(dataset_info, hp, ctx.seed)
+        opt = torch.optim.SGD(
+            [p for p in model.parameters() if p.requires_grad],
+            lr=lr, momentum=float(hp.get("momentum", 0.9)),
+        )
+
+        ckpt_dir = ctx.workdir / "checkpoints"
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
+
+        start_epoch, step = 0, 0
+        resumed_from_epoch: int | None = None
+        if ctx.resume_from is not None:
+            state = self.load_checkpoint(Path(ctx.resume_from))
+            model.load_state_dict(state["model"])
+            opt.load_state_dict(state["optimizer"])
+            start_epoch = int(state["epoch"]) + 1
+            step = int(state["step"])
+            resumed_from_epoch = int(state["epoch"])
+            if "rng" in state:
+                torch.set_rng_state(state["rng"])
+            ctx.emit({"type": "log",
+                      "line": f"resumed from checkpoint epoch {state['epoch']}"})
+
+        gen = torch.Generator().manual_seed(ctx.seed + 31337)
+        final_loss, val_acc = float("nan"), 0.0
+        for epoch in range(start_epoch, epochs):
+            model.train()
+            perm = torch.randperm(n, generator=gen)
+            epoch_loss, batches = 0.0, 0
+            for i in range(0, n, batch_size):
+                stop = ctx.should_stop()
+                if stop is not None:
+                    ckpt = ckpt_dir / f"ckpt-{epoch:04d}.pt"
+                    last_done = epoch - 1
+                    self.save_checkpoint(
+                        {"epoch": last_done, "step": step,
+                         "model": model.state_dict(),
+                         "optimizer": opt.state_dict(),
+                         "rng": torch.get_rng_state()}, ckpt)
+                    ctx.emit({"type": "checkpoint", "id": ckpt.stem, "epoch": last_done,
+                              "step": step, "path": str(ckpt)})
+                    return {"stopped": stop, "epochs": epoch,
+                            "resumed_from_epoch": resumed_from_epoch}
+                batch_idx = perm[i:i + batch_size]
+                opt.zero_grad()
+                emb = model(X_train[batch_idx])
+                loss = self._supcon_loss(torch, emb, y_train[batch_idx], temperature)
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                opt.step()
+                epoch_loss += float(loss.item())
+                batches += 1
+                step += 1
+
+            final_loss = epoch_loss / max(batches, 1)
+            val_acc = self._retrieval_accuracy(torch, model, data)
+            ctx.emit({"type": "metric", "name": "loss_epoch",
+                      "epoch": epoch, "step": step, "value": final_loss})
+            ctx.emit({"type": "metric", "name": "val_accuracy",
+                      "epoch": epoch, "step": step, "value": val_acc})
+            ctx.emit({"type": "log",
+                      "line": f"contrastive epoch {epoch}: loss={final_loss:.4f} "
+                              f"val_acc={val_acc:.4f}"})
+            ckpt = ckpt_dir / f"ckpt-{epoch:04d}.pt"
+            self.save_checkpoint(
+                {"epoch": epoch, "step": step,
+                 "model": model.state_dict(),
+                 "optimizer": opt.state_dict(),
+                 "rng": torch.get_rng_state()}, ckpt)
+            ctx.emit({"type": "checkpoint", "id": ckpt.stem, "epoch": epoch,
+                      "step": step, "path": str(ckpt)})
+
+        total, trainable = _count_params(model)
+        return {
+            "epochs": epochs, "final_loss": final_loss,
+            "val_accuracy": val_acc, "total_params": total,
+            "trainable_params": trainable,
+            "state": {"model": model.state_dict()},
+            "resumed_from_epoch": resumed_from_epoch,
+        }
+
+    # -- evaluation / export --------------------------------------------
+
+    def _retrieval_accuracy(self, torch: Any, model: Any, data: dict[str, Any]) -> float:
+        """Nearest-centroid classification on val embeddings."""
+        model.eval()
+        with torch.no_grad():
+            train_emb = model(data["X_train"])
+            val_emb = model(data["X_val"])
+            centroids = torch.stack([
+                train_emb[data["y_train"] == c].mean(dim=0)
+                for c in sorted(data["y_train"].unique().tolist())
+            ])
+            dists = torch.cdist(val_emb, centroids)
+            pred = dists.argmin(dim=1)
+            classes = sorted(data["y_train"].unique().tolist())
+            pred_labels = torch.tensor([classes[p] for p in pred.tolist()])
+            return float((pred_labels == data["y_val"]).float().mean().item())
+
+    def evaluate(
+        self, ctx: AdapterContext, state: dict[str, Any], dataset_info: dict[str, Any]
+    ) -> dict[str, float]:
+        torch = _torch()
+        data = torch.load(dataset_info["path"], map_location="cpu", weights_only=True)
+        model = self.build_model(dataset_info, ctx.hyperparameters, ctx.seed)
+        model.load_state_dict(state["model"])
+        return {"val_accuracy": self._retrieval_accuracy(torch, model, data)}
+
+    def export(
+        self,
+        ctx: AdapterContext,
+        state: dict[str, Any],
+        dataset_info: dict[str, Any],
+        out_dir: Path,
+    ) -> dict[str, Any]:
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        model_path = out_dir / "model.pt"
+        _save_checkpoint(state, model_path)
+        config = {
+            "training_method": self.name,
+            "embedding_dim": int(ctx.hyperparameters.get("embedding_dim", 32)),
+            "n_features": dataset_info["n_features"],
+            "n_classes": dataset_info["n_classes"],
+            "hyperparameters": ctx.hyperparameters,
+            "seed": ctx.seed,
+        }
+        config_path = out_dir / "config.json"
+        config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+        return {"files": {"model": str(model_path), "config": str(config_path)}}
+
+
+# --------------------------------------------------------------------------
 # Registry
 # --------------------------------------------------------------------------
 
@@ -739,6 +1314,8 @@ ADAPTERS: dict[str, TrainingMethodAdapter] = {
     "classifier": ClassifierAdapter(),
     "lora": LoRAAdapter(),
     "qlora": QLoRAAdapter(),
+    "distillation": DistillationAdapter(),
+    "contrastive": ContrastiveAdapter(),
 }
 
 
