@@ -53,3 +53,9 @@ Owner: Roger (SRogDev). Discussion language: Spanish. Implementation plans for c
 - Don't reformat whole files for style; keep diffs reviewable.
 - Never commit secrets, `.env` files, or credentials.
 - Don't invent metrics, benchmarks, or test results.
+
+## Code graph (graphify)
+- `graphify-out/GRAPH_REPORT.md` — generated code map (god nodes, communities, import cycles, suggested questions). Generated 2026-10-06 from `main` via `graphify extract . --code-only` (local tree-sitter parsing, zero API cost).
+- Only the report is committed — `graph.json` / `graph.html` / `cache/` are intentionally excluded (2–10MB; they regenerate in seconds).
+- Refresh after significant changes: `graphify extract . --code-only && graphify cluster-only . --no-label`, then commit the updated report.
+- For deep queries, generate the full graph locally and use `graphify query "<question>"`, `graphify path "A" "B"`, `graphify explain "X"`, `graphify affected "X"`.
