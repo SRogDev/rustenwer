@@ -1,6 +1,6 @@
 # STATUS — rustenwer
 
-> Single source of truth for where this project stands. Last updated: 2026-10-06.
+> Single source of truth for where this project stands. Last updated: 2026-10-08.
 > Read this before starting work. Update it in the same PR when reality changes.
 
 ## Done
@@ -8,9 +8,9 @@
 - 2026-09-27 — Fase 5 implementation done (`/methods` catalog + `/methods/[slug]` detail pages, methods service layer).
 
 ## In progress / blocked
-- Fase 5: final E2E verification + push NOT verified yet — pending.
+- Fase 5: push VERIFIED on main 2026-10-08 (all Phase-5 blobs match: docs/PHASE5.md, shared/services/methods.py, api/app/methods/, migration 005, web /methods UI). Final E2E verification still pending.
 - Blocked on Roger: Supabase project + migrations + `SUPABASE_URL`/`JWT_SECRET`.
 - CI: `.github/workflows/` cannot be pushed with the current token (lacks `workflows` scope) — needs a full-scope token or a local git remote.
 
 ## Next
-- Verify Fase 5 E2E, push, then continue per the 66-section plan.
+- Verify Fase 5 E2E, then continue per the 66-section plan (Fase 6: Candidate Experiment Engine — entry points in docs/PHASE5.md).
